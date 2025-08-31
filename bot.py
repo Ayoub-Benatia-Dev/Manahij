@@ -1,13 +1,13 @@
 import os
 import requests
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, MessageHandler, filters, ContextTypes
 
 # === مفاتيح API ===
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")  # مفتاح بوت التلغرام
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")  # مفتاح Google API
-CX_ID = os.getenv("CX_ID")  # ID لمحرك البحث المخصص (CSE)
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")  # مفتاح YouTube API
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+CX_ID = os.getenv("CX_ID")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 # === البحث في Google ===
 def google_search(query):
@@ -15,8 +15,11 @@ def google_search(query):
     response = requests.get(url).json()
     results = []
     if "items" in response:
-        for item in response["items"][:3]:  # نرجع 3 نتائج فقط
-            results.append(f"- {item['title']}\n{item['link']}\n")
+        for item in response["items"][:3]:  # نجيب 3 فقط
+            title = item['title']
+            link = item['link']
+            snippet = item.get("snippet", "")
+            results.append(f"📌 *{title}*\n{snippet}\n🔗 {link}\n")
     return "\n".join(results) if results else "ما لقيتش نتائج 😔"
 
 # === البحث في YouTube ===
@@ -29,7 +32,7 @@ def youtube_search(query):
             video_title = item["snippet"]["title"]
             video_id = item["id"]["videoId"]
             video_url = f"https://www.youtube.com/watch?v={video_id}"
-            results.append(f"- {video_title}\n{video_url}\n")
+            results.append(f"🎬 *{video_title}*\n🔗 {video_url}\n")
     return "\n".join(results) if results else "ما لقيتش فيديوهات 😔"
 
 # === التعامل مع الرسائل ===
@@ -41,7 +44,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         results = google_search(user_message)
 
-    await update.message.reply_text(results)
+    await update.message.reply_text(results, parse_mode="Markdown")
 
 # === تشغيل البوت ===
 def main():
