@@ -1,70 +1,47 @@
-import faiss, json, numpy as np
+import os
+import logging
 import google.generativeai as genai
 from telegram import Update
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# مفاتيحك
-TELEGRAM_BOT_TOKEN = "8367431259:AAEa_O2BzOQ6cpgX4rdOS3SiTKdvMbWAtQM"
-GEMINI_API_KEY = "AIzaSyDGS38J3w0t5cSKXwAQWBG_GUkJL8wdA14"
+# نجيب المفاتيح من Environment Variables
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
+# إعداد Gemini
 genai.configure(api_key=GEMINI_API_KEY)
-GEN_MODEL = "gemini-1.5-flash"
-EMBED_MODEL = "text-embedding-004"
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-INDEX_PATH = "faiss_index.bin"
-META_PATH = "faiss_meta.json"
+# تفعيل اللوق باش نعرف الأخطاء
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+)
 
-# تحميل الفهرس إذا متوفر
-try:
-    index = faiss.read_index(INDEX_PATH)
-    meta = json.load(open(META_PATH, encoding="utf-8"))
-    DOCS_META, CHUNKS = meta["meta"], meta["chunks"]
-except Exception:
-    index, DOCS_META, CHUNKS = None, [], []
-
-def embed(q: str):
-    v = genai.embed_content(model=EMBED_MODEL, content=q)["embedding"]["values"]
-    v = np.array(v, dtype="float32")
-    return v / (np.linalg.norm(v) + 1e-12)
-
-def retrieve(query, k=5):
-    if not index:
-        return []
-    v = embed(query).reshape(1, -1)
-    sims, idxs = index.search(v, k)
-    results = []
-    for sim, ix in zip(sims[0], idxs[0]):
-        results.append({"text": CHUNKS[ix], "source": DOCS_META[ix]["source"]})
-    return results
-
-def answer(query):
-    ctx = ""
-    docs = retrieve(query)
-    for d in docs:
-        ctx += f"[{d['source']}] {d['text']}\n"
-    prompt = f"""
-أجب جواباً سلفياً بالكتاب والسنة وأقوال العلماء الثقات فقط.
-السؤال: {query}
-المراجع:
-{ctx}
-"""
-    res = genai.GenerativeModel(GEN_MODEL).generate_content(prompt)
-    return res.text.strip()
-
+# أوامر البوت
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("السلام عليكم! أرسل سؤالك.")
+    await update.message.reply_text("السلام عليكم 👋 أنا بوت يخدم بالذكاء الاصطناعي.")
 
-async def handle_msg(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.message.text
-    a = answer(q)
-    await update.message.reply_text(a[:4000])
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("📖 أرسل سؤالك فقط وأنا نجاوبك إن شاء الله.")
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_message = update.message.text
+    try:
+        response = model.generate_content(user_message)
+        await update.message.reply_text(response.text)
+    except Exception as e:
+        await update.message.reply_text("❌ وقع خطأ: " + str(e))
 
 def main():
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_msg))
-    print("Bot running...")
-    app.run_polling()
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+
+    # تعريف الأوامر
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    # تشغيل البوت
+    application.run_polling()
 
 if __name__ == "__main__":
     main()
