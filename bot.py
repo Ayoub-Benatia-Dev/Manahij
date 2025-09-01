@@ -4,7 +4,7 @@ import requests
 import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from googleapiclient.discovery import build
+from googleapient.discovery import build
 
 # إعدادات التسجيل لتتبع ما يحدث في البوت
 logging.basicConfig(
@@ -165,14 +165,14 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             
             final_message = general_text
             if sources:
-                final_message += "\n\nالمصدر:"
-                for source in sources:
+                final_message += "\n\n**المصدر:**"
+                for i, source in enumerate(sources, 1):
                     uri = source.get("web", {}).get("uri", "")
                     title = source.get("web", {}).get("title", "")
                     if uri and title:
-                        final_message += f"\n- {title}: {uri}"
+                        final_message += f"\n- [{i}]({uri}) {title}"
 
-            await update.message.reply_text(final_message)
+            await update.message.reply_markdown_v2(final_message)
         else:
             await update.message.reply_text("عذرًا، لم أتمكن من فهم طلبك.")
 
