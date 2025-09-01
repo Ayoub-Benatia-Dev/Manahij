@@ -59,9 +59,13 @@ def gemini_filter_sort(results):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
     prompt = "قم بفرز هذه النتائج بحيث تُبقي فقط المصادر الموثوقة علمياً وسلفياً، وتجاهل أي محتوى فيه شبهات أو ضلال:\n\n"
     for r in results:
-        snippet = r.get('snippet', '')  # لو مش موجود نخلي نص فارغ
+        snippet = r.get('snippet', '')
         prompt += f"{r['title']}\n{r['link']}\n{snippet}\n\n"
     payload = {
+        "temperature": 0,
+        "candidate_count": 1,
+        "top_p": 0.95,
+        "max_output_tokens": 500,
         "contents": [{"parts": [{"text": prompt}]}]
     }
     try:
@@ -69,7 +73,8 @@ def gemini_filter_sort(results):
         data = response.json()
         filtered_text = data["candidates"][0]["content"]["parts"][0]["text"]
         return filtered_text
-    except:
+    except Exception as e:
+        print("Gemini API Error:", e)
         return "لم يتمكن النظام من فلترة النتائج."
 
 # ---- TELEGRAM BOT ----
