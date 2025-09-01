@@ -1,279 +1,216 @@
-import requests
+# -*- coding: utf-8 -*-
+import os
+import logging
+import json
+import re
+import asyncio
+import aiohttp
 from bs4 import BeautifulSoup
-from telegram.ext import Application, CommandHandler, MessageHandler, filters
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ---- API KEYS ----
-TELEGRAM_TOKEN = "8367431259:AAEa_O2BzOQ6cpgX4rdOS3SiTKdvMbWAtQM"
-GOOGLE_API_KEY = "AIzaSyDCay69bExFEAt4y7XEiSK1WmG6KB5l-yw"
-YOUTUBE_API_KEY = "AIzaSyBMa4CY_Ndc6RDq2uIDO0nZvhtxvsdF4h4"
-GOOGLE_CX = "369d6d61d01414942"
+# ---- Logging Setup / إعدادات التسجيل ----
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# ---- قائمة العلماء الموثوقين ----
-trusted_keywords = [
-    "إبراهيم محمد كشيدان",
-    "Ibrahim Muhammad Kashidan",
-    "أحمد بازمول",
-    "Ahmad Bazmul",
-    "أحمد شاكر",
-    "Ahmad Shakir",
-    "أحمد النجمي",
-    "Ahmad al-Najmi",
-    "أسامة بن زيد المدخلي",
-    "Usama ibn Zayd al-Madkhali",
-    "الأمين الشنقيطي الجكني",
-    "al-Amin al-Shinqiti al-Jakni",
-    "الأمر تسري",
-    "al-Amr Tasri",
-    "البشير الإبراهيمي",
-    "al-Bashir al-Ibrahimi",
-    "البهكلي",
-    "al-Bahkali",
-    "البرعي اليمني",
-    "al-Burai al-Yamani",
-    "الطيب العقبي",
-    "al-Tayyib al-Uqbi",
-    "جمال الحارثي",
-    "Jamal al-Harithi",
-    "حافظ الحكمي",
-    "Hafiz al-Hakami",
-    "حامد الفقي",
-    "Hamid al-Faqi",
-    "حسن بن عبد الوهاب البنا السلفي",
-    "Hassan ibn Abdul Wahhab al-Banna al-Salafi",
-    "حمد العثمان",
-    "Hamad al-Uthman",
-    "خالد بن عبد الرحمن ال زكي",
-    "Khalid ibn Abdul Rahman Al al-Zaki",
-    "خالد عثمان المصري",
-    "Khalid Uthman al-Masri",
-    "دغش العجمي",
-    "Daghash al-Ajmi",
-    "ربيع المدخلي",
-    "Rabee' al-Madkhali",
-    "زيد المدخلي",
-    "Zayd al-Madkhali",
-    "سالم موريدا",
-    "Salim Mawrida",
-    "سعد الحصين",
-    "Saad al-Hussain",
-    "سعد بن ناصر الشثري",
-    "Saad ibn Nasser al-Shathri",
-    "سليمان الرحيل",
-    "Sulaiman al-Rahil",
-    "صالح آل الشيخ",
-    "Salih Al al-Sheikh",
-    "صالح السحيمي",
-    "Salih al-Suhaimi",
-    "صالح السندي",
-    "Salih al-Sindi",
-    "صالح العصيمي",
-    "Salih al-Usaymi",
-    "صالح الفوزان",
-    "Salih al-Fawzan",
-    "صالح اللحيدان",
-    "Salih al-Luhaidan",
-    "صفي الرحمن المباركفوري",
-    "Safi al-Rahman al-Mubarakpuri",
-    "عادل السيد",
-    "Adil al-Sayyid",
-    "عادل الشوريجي",
-    "Adil al-Shuraiji",
-    "عادل المشوري",
-    "Adil al-Mashuri",
-    "عادل منصور الباشا",
-    "Adil Mansur al-Basha",
-    "عايد بن خليفة الشمري",
-    "Ayed bin Khalifa al-Shammari",
-    "عبد الرحمن المعلمي اليمني",
-    "Abdul Rahman al-Mu'allimi al-Yamani",
-    "عبد الرحمن العميسان",
-    "Abdurrahman al-Umeisan",
-    "عبد الرحمن الوكيل",
-    "Abdul Rahman al-Wakil",
-    "عبد السلام الشويعر",
-    "Abdul Salam al-Shuwair",
-    "عبد السلام بن برجس آل عبد الكريم",
-    "Abdul Salam ibn Barjis Al Abdul Karim",
-    "عبد السلام السحيمي",
-    "Abdussalam al-Suhaimi",
-    "عبد العزيز آل الشيخ",
-    "Abdul Aziz Al al-Sheikh",
-    "عبد العزيز بن باز",
-    "Abdulaziz ibn Baz",
-    "عبد القادر بن محمد الجنيد",
-    "Abdul Qadir ibn Muhammad al-Junayd",
-    "عبد الله القرعاوي",
-    "Abdullah al-Qar'awi",
-    "عبد الله بن حميد",
-    "Abdullah ibn Humaid",
-    "عبد الله الوصابي",
-    "Abdullah al-Wassabi",
-    "عبد الله الغديان",
-    "Abdullah al-Ghudayyan",
-    "عبد المحسن العباد البدر",
-    "Abdul Muhsin al-Abbad al-Badr",
-    "عبد الحميد بن باديس",
-    "Abdul Hamid ibn Badis",
-    "عبد الرزاق حمزة",
-    "Abdul Razzaq Hamza",
-    "عبد الرزاق عفيفي",
-    "Abdur Razzaq Afifi",
-    "عبد الرزاق البدر",
-    "Abdul Razzaq al-Badr",
-    "عبد محمد الإمام",
-    "Abd Muhammad al-Imam",
-    "عبيد الجابري",
-    "Ubayd al-Jabri",
-    "عزيز فريحان",
-    "Aziz Furayhan",
-    "علي الحدادي",
-    "Ali al-Haddadi",
-    "علي الحذيفي",
-    "Ali al-Huthayfi",
-    "علي بن زيد المدخلي",
-    "Ali ibn Zayd al-Madkhali",
-    "عمر بن محمد فلاته",
-    "Umar ibn Muhammad Fallata",
-    "عثمان السالمي",
-    "Uthman al-Salimi",
-    "فلاح مندكار",
-    "Fallah Mandakar",
-    "مبارك الميلي",
-    "Mubarak al-Mili",
-    "مزمل فقيري",
-    "Muzammil Faqiri",
-    "محمود شاكر",
-    "Mahmud Shakir",
-    "محمد ابن صالح العثيمين",
-    "Muhammad ibn Salih al-Uthaymin",
-    "محمد بازمول",
-    "Muhammad Bazmul",
-    "محمد خليل هراس",
-    "Muhammad Khalil Haras",
-    "محمد سعيد رسلان",
-    "Muhammad Saeed Raslan",
-    "محمد غيث",
-    "Muhammad Ghayth",
-    "محمد الفيفي",
-    "Muhammad al-Fayfi",
-    "محمد العقيل",
-    "Muhammad al-Aqeel",
-    "محمد العنجرى",
-    "Muhammad al-Anjari",
-    "محمد ناصر الألباني",
-    "Muhammad Nasser al-Albani",
-    "محمد أحمد الألباني",
-    "Muhammad Ahmad al-Albani",
-    "محمد بن إبراهيم الوزير",
-    "Muhammad ibn Ibrahim al-Wazir",
-    "محمد بن إسماعيل الصنعاني",
-    "Muhammad ibn Ismail al-San'ani",
-    "محمد بن زيد المدخلي",
-    "Muhammad ibn Zayd al-Madkhali",
-    "محمد بن عليص الشوكاني",
-    "Muhammad ibn Ali al-Shawkani",
-    "محمد بن أمان الجامي",
-    "Muhammad ibn Aman al-Jami",
-    "محمد بن هادي المدخلي",
-    "Muhammad ibn Hadi al-Madkhali",
-    "محمد بن رمضان الهاجري",
-    "Muhammad ibn Ramadan al-Hajri",
-    "محمد بن ربيع المدخلي",
-    "Muhammad ibn Rabee' al-Madkhali",
-    "مقبل بن هادي الوادعي",
-    "Muqbil ibn Hadi al-Wadi'i",
-    "نعمان الوتر",
-    "Nu'man al-Witr"
-]
+# ---- API KEYS (using environment variables for security) ----
+# مفاتيح API (باستخدام متغيرات البيئة للأمان)
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+GOOGLE_CX = os.environ.get("GOOGLE_CX")
 
-# ---- HELPER FUNCTIONS ----
-def get_page_text(url):
+if not all([TELEGRAM_TOKEN, GOOGLE_API_KEY, YOUTUBE_API_KEY, GOOGLE_CX]):
+    logger.error("Environment variables for API keys are not set. Please set them.")
+    raise ValueError("One or more API keys are missing from environment variables.")
+
+# ---- Trusted Scholars List (loaded from a file) / قائمة العلماء الموثوقين (يتم تحميلها من ملف) ----
+def load_trusted_scholars():
+    """Loads the trusted scholars list from a JSON file."""
+    # يقوم بتحميل قائمة العلماء الموثوقين من ملف JSON
     try:
-        r = requests.get(url, timeout=5)
-        soup = BeautifulSoup(r.text, "html.parser")
-        p = soup.find('p')
-        if p:
-            return p.get_text()[:250] + "..."
+        with open("trusted_scholars.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        logger.error("trusted_scholars.json file not found.")
+        return []
+    except json.JSONDecodeError:
+        logger.error("Error decoding JSON from trusted_scholars.json.")
+        return []
+
+TRUSTED_KEYWORDS = load_trusted_scholars()
+if not TRUSTED_KEYWORDS:
+    logger.warning("Trusted scholars list is empty. Filtering will not be applied.")
+
+# ---- HELPER FUNCTIONS / دوال مساعدة ----
+async def get_page_text(url, session):
+    """Fetches a URL and extracts the first paragraph text asynchronously."""
+    # يجلب نص الصفحة من رابط ويستخرج الفقرة الأولى بشكل لا متزامن
+    try:
+        async with session.get(url, timeout=5) as response:
+            if response.status == 200:
+                html = await response.text()
+                soup = BeautifulSoup(html, "html.parser")
+                p = soup.find('p')
+                if p:
+                    return p.get_text()[:250] + "..."
         return ""
-    except:
+    except Exception as e:
+        logger.error(f"Error fetching page text from {url}: {e}")
         return ""
 
-# ---- GOOGLE SEARCH ----
-def search_google(query: str):
+# ---- GOOGLE SEARCH (Asynchronous) / بحث جوجل (غير متزامن) ----
+async def search_google(query: str, session):
+    """Performs a Google search and returns results asynchronously."""
+    # يجري بحث جوجل ويعيد النتائج بشكل لا متزامن
     url = f"https://www.googleapis.com/customsearch/v1?q={query}&key={GOOGLE_API_KEY}&cx={GOOGLE_CX}"
     try:
-        r = requests.get(url)
-        results = r.json().get("items", [])
-        search_results = []
-        for result in results[:5]:
-            link = result['link']
-            title = result['title']
-            snippet = get_page_text(link)
-            search_results.append({"title": title, "link": link, "snippet": snippet})
-        return search_results
-    except:
+        async with session.get(url) as response:
+            results = (await response.json()).get("items", [])
+            search_results = []
+            for result in results[:5]:
+                link = result.get('link')
+                title = result.get('title')
+                if link and title:
+                    snippet = await get_page_text(link, session)
+                    search_results.append({"title": title, "link": link, "snippet": snippet})
+            return search_results
+    except Exception as e:
+        logger.error(f"Error during Google search for '{query}': {e}")
         return []
 
-# ---- YOUTUBE SEARCH ----
-def search_youtube(query: str):
+# ---- YOUTUBE SEARCH (Asynchronous) / بحث يوتيوب (غير متزامن) ----
+async def search_youtube(query: str, session):
+    """Performs a YouTube search and returns results asynchronously."""
+    # يجري بحث يوتيوب ويعيد النتائج بشكل لا متزامن
     url = f"https://www.googleapis.com/youtube/v3/search?part=snippet&q={query}&key={YOUTUBE_API_KEY}&maxResults=5&type=video"
     try:
-        r = requests.get(url)
-        items = r.json().get("items", [])
-        videos = []
-        for item in items:
-            video_id = item["id"]["videoId"]
-            title = item["snippet"]["title"]
-            videos.append({"title": title, "link": f"https://www.youtube.com/watch?v={video_id}"})
-        return videos
-    except:
+        async with session.get(url) as response:
+            items = (await response.json()).get("items", [])
+            videos = []
+            for item in items:
+                video_id = item.get("id", {}).get("videoId")
+                title = item.get("snippet", {}).get("title")
+                if video_id and title:
+                    videos.append({"title": title, "link": f"https://www.youtube.com/watch?v={video_id}"})
+            return videos
+    except Exception as e:
+        logger.error(f"Error during YouTube search for '{query}': {e}")
         return []
 
-# ---- SIMPLE FILTER ----
+# ---- FILTERING (Enhanced with Regex) / الفلترة (محسّنة بالتعبيرات النمطية) ----
 def simple_filter(results):
+    """Filters results based on a list of trusted keywords using regex for precision."""
+    # يفلتر النتائج بناءً على قائمة من الكلمات المفتاحية الموثوقة باستخدام التعبيرات النمطية
     filtered = []
     for r in results:
-        text = r.get('snippet', '') + " " + r['title']
-        for keyword in trusted_keywords:
-            if keyword in text:
+        # Check both title and snippet for the keyword
+        # فحص العنوان والمقتطف للكلمة المفتاحية
+        text_to_search = f"{r.get('title', '')} {r.get('snippet', '')}"
+        
+        # Create a regex pattern for a whole word match
+        # إنشاء نمط تعبير نمطي للبحث عن كلمة كاملة
+        for keyword in TRUSTED_KEYWORDS:
+            pattern = r'\b' + re.escape(keyword) + r'\b'
+            if re.search(pattern, text_to_search, re.IGNORECASE | re.UNICODE):
                 filtered.append(r)
                 break
     return filtered
 
-# ---- TELEGRAM BOT ----
-async def start(update, context):
+# ---- TELEGRAM BOT COMMAND HANDLERS / معالجات أوامر بوت تيليجرام ----
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a welcome message when the command /start is issued."""
+    # يرسل رسالة ترحيب عند إعطاء أمر /start
     await update.message.reply_text(
-        "📚 مرحبا بك في *بوت مناهج*.\nاكتب سؤالك وسيتم البحث وفلترة النتائج."
+        "📚 مرحبا بك في *بوت مناهج*.\n\n"
+        "هذا البوت يساعدك في البحث عن إجابات من مصادر إسلامية موثوقة.\n\n"
+        "اكتب سؤالك وسأقوم بالبحث وفلترة النتائج لك.\n"
+        "للمزيد من المعلومات، استخدم الأمر /help"
     )
 
-async def handle_message(update, context):
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Sends a help message when the command /help is issued."""
+    # يرسل رسالة مساعدة عند إعطاء أمر /help
+    help_text = (
+        "هذا البوت يبحث عن إجابات على أسئلتك من مصادر إسلامية موثوقة.\n\n"
+        "**طريقة الاستخدام:**\n"
+        "1. فقط أرسل سؤالك في المحادثة.\n"
+        "2. سيقوم البوت بالبحث على جوجل ويوتيوب.\n"
+        "3. سيتم فلترة النتائج لعرض ما هو منسوب لعلماء موثوقين فقط.\n\n"
+        "⚠️ **ملاحظة:** قد لا تكون جميع النتائج دقيقة بنسبة 100%، فالعملية آلية. "
+        "يجب عليك دائمًا التحقق من صحة المعلومة."
+    )
+    await update.message.reply_text(help_text)
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handles user messages, performs search and filtering."""
+    # يتعامل مع رسائل المستخدم، يجري البحث والفلترة
     question = update.message.text
-    await update.message.reply_text("⏳ جاري البحث .. استنى شوي")
+    if not question:
+        await update.message.reply_text("عذراً، لم أستقبل أي نص. يرجى إرسال سؤالك.")
+        return
 
-    google_results = search_google(question)
-    youtube_results = search_youtube(question)
-    combined = google_results + youtube_results
+    await update.message.reply_text("⏳ جاري البحث..")
 
-    filtered = simple_filter(combined)
+    try:
+        # Use an aiohttp session for all requests
+        async with aiohttp.ClientSession() as session:
+            google_task = search_google(question, session)
+            youtube_task = search_youtube(question, session)
+            
+            # Run both searches concurrently
+            google_results, youtube_results = await asyncio.gather(google_task, youtube_task)
 
-    if not filtered:
-        await update.message.reply_text("📖 لم يتم العثور على نتائج موثوقة للعلماء السلفيين.")
-    else:
-        msg = ""
-        for r in filtered:
-            msg += f"📌 {r['title']}\n🔗 {r['link']}\n\n"
-        await update.message.reply_text(msg)
+        combined = google_results + youtube_results
 
-# ---- MAIN ----
+        if not combined:
+            await update.message.reply_text("❌ عذراً، لم يتم العثور على نتائج للبحث. قد يكون هناك خطأ في الشبكة أو أن السؤال غير واضح.")
+            return
+
+        await update.message.reply_text("🔍 تم العثور على نتائج. الآن جاري فلترتها...")
+
+        filtered = simple_filter(combined)
+
+        if not filtered:
+            await update.message.reply_text("📖 لم يتم العثور على نتائج موثوقة للعلماء السلفيين.")
+        else:
+            msg = "✅ إليك النتائج الموثوقة:\n\n"
+            for r in filtered:
+                msg += f"📌 *{r['title']}*\n"
+                msg += f"🔗 {r['link']}\n"
+                # Add snippet for more context
+                if 'snippet' in r and r['snippet']:
+                    msg += f"📝 _{r['snippet']}_\n"
+                msg += "\n"
+            
+            await update.message.reply_text(msg, parse_mode="Markdown")
+
+    except Exception as e:
+        logger.error(f"An error occurred: {e}", exc_info=True)
+        await update.message.reply_text("❌ حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى لاحقًا.")
+
+# ---- MAIN / البرنامج الرئيسي ----
+def main() -> None:
+    """Starts the bot."""
+    # يبدأ البوت
+    try:
+        app = Application.builder().token(TELEGRAM_TOKEN).build()
+        app.add_handler(CommandHandler("start", start))
+        app.add_handler(CommandHandler("help", help_command))
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+        # This part remains the same as it's for the deployment environment
+        app.run_webhook(
+            listen="0.0.0.0",
+            port=int(os.environ.get("PORT", 10000)),
+            url_path=TELEGRAM_TOKEN,
+            webhook_url=os.environ.get("WEBHOOK_URL", f"https://manhaj-bot.onrender.com/{TELEGRAM_TOKEN}")
+        )
+    except Exception as e:
+        logger.error(f"Failed to start bot due to an error: {e}")
+
 if __name__ == "__main__":
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    app.run_webhook(
-        listen="0.0.0.0",
-        port=10000,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=f"https://manhaj-bot.onrender.com/{TELEGRAM_TOKEN}"
-    )
-
+    main()
