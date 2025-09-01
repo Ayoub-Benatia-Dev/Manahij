@@ -4,7 +4,7 @@ import requests
 import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
-from googleapient.discovery import build
+from googleapiclient.discovery import build
 
 # إعدادات التسجيل لتتبع ما يحدث في البوت
 logging.basicConfig(
