@@ -147,15 +147,32 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             await update.message.reply_text("جاري الإجابة على سؤالك باستخدام Gemini...")
             general_prompt = f"قم بالإجابة على هذا السؤال بشكل مختصر: {query_text}"
             
-            payload = {
-                "contents": [{"parts": [{"text": general_prompt}]}]
+            # Use Google Search grounding to get the source
+            payload_with_grounding = {
+                "contents": [{
+                    "parts": [{"text": general_prompt}]
+                }],
+                "tools": [{"google_search": {}}],
             }
             
-            general_response = requests.post(api_url, json=payload)
+            general_response = requests.post(api_url, json=payload_with_grounding)
             general_response.raise_for_status()
             general_result = general_response.json()
+            
+            # Extract the text and the source
             general_text = general_result["candidates"][0]["content"]["parts"][0]["text"]
-            await update.message.reply_text(general_text)
+            sources = general_result.get("candidates", [{}])[0].get("groundingMetadata", {}).get("groundingAttributions", [])
+            
+            final_message = general_text
+            if sources:
+                final_message += "\n\nالمصدر:"
+                for source in sources:
+                    uri = source.get("web", {}).get("uri", "")
+                    title = source.get("web", {}).get("title", "")
+                    if uri and title:
+                        final_message += f"\n- {title}: {uri}"
+
+            await update.message.reply_text(final_message)
         else:
             await update.message.reply_text("عذرًا، لم أتمكن من فهم طلبك.")
 
