@@ -30,13 +30,13 @@ def search_google(query: str):
         if not results:
             return []
         search_results = []
-        for result in results[:5]:  # نجيب أول 5 نتائج
+        for result in results[:5]:
             link = result['link']
             title = result['title']
             snippet = get_page_text(link)
             search_results.append({"title": title, "link": link, "snippet": snippet})
         return search_results
-    except Exception as e:
+    except:
         return []
 
 # ---- YOUTUBE SEARCH ----
@@ -57,17 +57,16 @@ def search_youtube(query: str):
 # ---- GEMINI FILTER & SORT ----
 def gemini_filter_sort(results):
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
-    # نحضر النتائج في نص واحد ونسأل Gemini يفلتر الموثوق فقط
     prompt = "قم بفرز هذه النتائج بحيث تُبقي فقط المصادر الموثوقة علمياً وسلفياً، وتجاهل أي محتوى فيه شبهات أو ضلال:\n\n"
     for r in results:
-        prompt += f"{r['title']}\n{r['link']}\n{r['snippet']}\n\n"
+        snippet = r.get('snippet', '')  # لو مش موجود نخلي نص فارغ
+        prompt += f"{r['title']}\n{r['link']}\n{snippet}\n\n"
     payload = {
         "contents": [{"parts": [{"text": prompt}]}]
     }
     try:
         response = requests.post(url, json=payload)
         data = response.json()
-        # نأخذ النص اللي رده Gemini
         filtered_text = data["candidates"][0]["content"]["parts"][0]["text"]
         return filtered_text
     except:
@@ -86,7 +85,6 @@ async def handle_message(update, context):
     google_results = search_google(question)
     youtube_results = search_youtube(question)
 
-    # نجمع كل نتائج Google + YouTube في قائمة واحدة للفلترة
     combined = google_results + youtube_results
     filtered = gemini_filter_sort(combined)
 
@@ -98,7 +96,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Webhook للبوت على Render
     app.run_webhook(
         listen="0.0.0.0",
         port=10000,
