@@ -200,7 +200,6 @@ def main() -> None:
             url_path=TELEGRAM_TOKEN,
             webhook_url=WEBHOOK_URL
         )
-        print(f"البوت يعمل الآن باستخدام Webhook على المنفذ {PORT}...")
     else:
         # في حال لم يتم العثور على رابط الـ Webhook، استخدم طريقة Polling كخيار احتياطي
         application.run_polling(allowed_updates=Update.ALL_TYPES)
