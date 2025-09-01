@@ -2,7 +2,6 @@
 import os
 import logging
 import json
-import re
 import asyncio
 import aiohttp
 from bs4 import BeautifulSoup
@@ -16,16 +15,15 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# ---- API KEYS (using environment variables for security) ----
-# مفاتيح API (باستخدام متغيرات البيئة للأمان)
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
-GOOGLE_CX = os.environ.get("GOOGLE_CX")
-
-if not all([TELEGRAM_TOKEN, GOOGLE_API_KEY, YOUTUBE_API_KEY, GOOGLE_CX]):
-    logger.error("Environment variables for API keys are not set. Please set them.")
-    raise ValueError("One or more API keys are missing from environment variables.")
+# ---- API KEYS (hardcoded from user input) ----
+# مفاتيح API (مضافة مباشرة من مدخلات المستخدم)
+TELEGRAM_TOKEN = "8367431259:AAEa_O2BzOQ6cpgX4rdOS3SiTKdvMbWAtQM"
+GOOGLE_API_KEY = "AIzaSyDCay69bExFEAt4y7XEiSK1WmG6KB5l-yw"
+YOUTUBE_API_KEY = "AIzaSyBMa4CY_Ndc6RDq2uIDO0nZvhtxvsdF4h4"
+GOOGLE_CX = "369d6d61d01414942"
+# Gemini API details for AI filtering
+GEMINI_API_KEY = "AIzaSyDGS38J3w0t5cSKXwAQWBG_GUkJL8wdA14"
+GEMINI_API_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
 
 # ---- Trusted Scholars List (loaded from a file) / قائمة العلماء الموثوقين (يتم تحميلها من ملف) ----
 def load_trusted_scholars():
@@ -43,7 +41,7 @@ def load_trusted_scholars():
 
 TRUSTED_KEYWORDS = load_trusted_scholars()
 if not TRUSTED_KEYWORDS:
-    logger.warning("Trusted scholars list is empty. Filtering will not be applied.")
+    logger.warning("Trusted scholars list is empty. AI filtering will still be applied, but results may be less specific.")
 
 # ---- HELPER FUNCTIONS / دوال مساعدة ----
 async def get_page_text(url, session):
@@ -101,24 +99,73 @@ async def search_youtube(query: str, session):
         logger.error(f"Error during YouTube search for '{query}': {e}")
         return []
 
-# ---- FILTERING (Enhanced with Regex) / الفلترة (محسّنة بالتعبيرات النمطية) ----
-def simple_filter(results):
-    """Filters results based on a list of trusted keywords using regex for precision."""
-    # يفلتر النتائج بناءً على قائمة من الكلمات المفتاحية الموثوقة باستخدام التعبيرات النمطية
-    filtered = []
-    for r in results:
-        # Check both title and snippet for the keyword
-        # فحص العنوان والمقتطف للكلمة المفتاحية
-        text_to_search = f"{r.get('title', '')} {r.get('snippet', '')}"
-        
-        # Create a regex pattern for a whole word match
-        # إنشاء نمط تعبير نمطي للبحث عن كلمة كاملة
-        for keyword in TRUSTED_KEYWORDS:
-            pattern = r'\b' + re.escape(keyword) + r'\b'
-            if re.search(pattern, text_to_search, re.IGNORECASE | re.UNICODE):
-                filtered.append(r)
-                break
-    return filtered
+# ---- AI FILTERING (using Gemini API) / الفلترة بالذكاء الاصطناعي (باستخدام Gemini API) ----
+async def gemini_filter(results, session):
+    """
+    Uses the Gemini API to filter results based on a list of trusted scholars.
+    يستخدم Gemini API لفلترة النتائج بناءً على قائمة العلماء الموثوقين.
+    """
+    if not TRUSTED_KEYWORDS:
+        logger.warning("No trusted scholars list available. Returning all results without AI filtering.")
+        return results
+
+    filtered_results = []
+    
+    # Construct the system instruction and user query
+    # بناء التعليمات والمحتوى للمستخدم
+    system_instruction = (
+        "You are an expert AI filter. Your task is to evaluate a list of search results "
+        "and identify which ones are directly related to the trusted scholars provided. "
+        "The response MUST be a JSON array containing only the titles of the related results."
+    )
+    
+    trusted_scholars_list = ", ".join(TRUSTED_KEYWORDS)
+    
+    user_query = (
+        f"Here is a list of search results. Based on the titles and snippets, "
+        f"which of these are directly related to any of the following scholars: {trusted_scholars_list}?\n\n"
+        f"Search Results:\n"
+    )
+    for i, r in enumerate(results):
+        user_query += f"Result {i+1}: Title: {r.get('title', '')} | Snippet: {r.get('snippet', 'N/A')}\n"
+    
+    user_query += "\nRespond with a JSON array of the titles that are directly related."
+
+    payload = {
+        "contents": [{"parts": [{"text": user_query}]}],
+        "systemInstruction": {"parts": [{"text": system_instruction}]},
+        "generationConfig": {
+            "responseMimeType": "application/json",
+            "responseSchema": {
+                "type": "ARRAY",
+                "items": {"type": "STRING"}
+            }
+        },
+    }
+
+    try:
+        async with session.post(f"{GEMINI_API_URL}?key={GEMINI_API_KEY}", json=payload) as response:
+            if response.status == 200:
+                result = await response.json()
+                response_text = result.get('candidates', [{}])[0].get('content', {}).get('parts', [{}])[0].get('text', '[]')
+                
+                # Sanitize the response to ensure it's a valid JSON array
+                response_text = response_text.replace('```json', '').replace('```', '')
+                
+                related_titles = json.loads(response_text)
+                
+                # Filter the original results based on the titles returned by Gemini
+                for r in results:
+                    if r.get('title') in related_titles:
+                        filtered_results.append(r)
+            else:
+                logger.error(f"Gemini API request failed with status code: {response.status}")
+                return results # Fallback to no-AI-filtering
+    except Exception as e:
+        logger.error(f"Error during Gemini filtering: {e}", exc_info=True)
+        return results # Fallback to no-AI-filtering
+
+    return filtered_results
 
 # ---- TELEGRAM BOT COMMAND HANDLERS / معالجات أوامر بوت تيليجرام ----
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -139,7 +186,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "**طريقة الاستخدام:**\n"
         "1. فقط أرسل سؤالك في المحادثة.\n"
         "2. سيقوم البوت بالبحث على جوجل ويوتيوب.\n"
-        "3. سيتم فلترة النتائج لعرض ما هو منسوب لعلماء موثوقين فقط.\n\n"
+        "3. سيتم فلترة النتائج باستخدام الذكاء الاصطناعي لعرض ما هو منسوب لعلماء موثوقين فقط.\n\n"
         "⚠️ **ملاحظة:** قد لا تكون جميع النتائج دقيقة بنسبة 100%، فالعملية آلية. "
         "يجب عليك دائمًا التحقق من صحة المعلومة."
     )
@@ -170,9 +217,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await update.message.reply_text("❌ عذراً، لم يتم العثور على نتائج للبحث. قد يكون هناك خطأ في الشبكة أو أن السؤال غير واضح.")
             return
 
-        await update.message.reply_text("🔍 تم العثور على نتائج. الآن جاري فلترتها...")
+        await update.message.reply_text("🧠 جاري الفلترة بواسطة الذكاء الاصطناعي... قد يستغرق هذا بعض الوقت.")
 
-        filtered = simple_filter(combined)
+        # AI-powered filtering
+        filtered = await gemini_filter(combined, session)
 
         if not filtered:
             await update.message.reply_text("📖 لم يتم العثور على نتائج موثوقة للعلماء السلفيين.")
