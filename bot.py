@@ -30,7 +30,6 @@ def get_page_text(url):
     try:
         r = requests.get(url, timeout=5)
         soup = BeautifulSoup(r.text, "html.parser")
-        # ناخذ أول فقرة عندها نص
         p = soup.find('p')
         if p:
             return p.get_text()[:250] + "..."
@@ -64,18 +63,21 @@ async def start(update, context):
 async def handle_message(update, context):
     question = update.message.text
     await update.message.reply_text("⏳ جاري البحث .. استنى شوي")
-
     google_result = search_google(question)
     youtube_result = search_youtube(question)
-
     response = f"🔎 *من Google:*\n{google_result}\n\n▶️ *من YouTube:*\n{youtube_result}"
     await update.message.reply_text(response, parse_mode="Markdown")
 
-def main():
+# ---- MAIN ----
+if __name__ == "__main__":
     app = Application.builder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    app.run_polling()
 
-if __name__ == "__main__":
-    main()
+    # ---- WEBHOOK ----
+    app.run_webhook(
+        listen="0.0.0.0",
+        port=10000,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"https://manhaj-bot.onrender.com/{TELEGRAM_TOKEN}"
+    )
