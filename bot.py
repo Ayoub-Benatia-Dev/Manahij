@@ -1,311 +1,196 @@
-# bot.py
+# gemini_fallback.py
+# دالة جاهزة تستعمل داخل بوتك: "تحاول" Gemini بالموديل الأساسي، وإذا فشل
+# تنتقل تلقائياً لموديلات بديلة عبر REST API (مثل gemini-2.0-flash).
+# تقدر تدمج هذي الدالة في bot.py وتستبدل مكالمات Gemini السابقة بها.
+#
+# المتطلبات:
+# - متغير البيئة GEMINI_API_KEY معرف بمفتاحك
+# - المكتبات: requests, google.generativeai (اختياري)
+#
+# استدعاء نموذجي:
+# text = gemini_fallback_generate(instructions, user_prompt)
+# لو text == None فمعناه كل المحاولات فشلت.
+
 import os
-import re
 import time
-import asyncio
 import logging
-from typing import List, Dict, Optional
-
 import requests
-from bs4 import BeautifulSoup
+from typing import List, Optional
 
-from telegram import Update
-from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
-
+# لو مثبت مكتبة genai نستخدمها أولاً (أسرع لو شغالة)
 try:
-    import google.generativeai as genai
+    import google.generativeai as genai  # النوع الرسمي لو متوفر
 except Exception:
     genai = None
 
-try:
-    from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
-except Exception:
-    YouTubeTranscriptApi = None
-    TranscriptsDisabled = Exception
-    NoTranscriptFound = Exception
+logger = logging.getLogger("gemini_fallback")
+logger.setLevel(logging.INFO)
 
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-GOOGLE_CX = os.getenv("GOOGLE_CX")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-MODEL_NAME = os.getenv("GEMINI_MODEL", "models/gemini-1.5")
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-SCHOLARS = [
-    "ربيع المدخلي","عبيد الجابري","صالح الفوزان","صالح اللاحيدان","عبدالمحسن العباد",
-    "محمد بن هادي المدخلي","عبد العزيز آل الشيخ","محمد سعيد رسلان","البرعي","عبد الرزاق عفيفي",
-    "حسن بن عبد الوهاب البنا","البهكلي","الأمين الشنقيطي","عبد الرحمن العميسان",
-    "سليمان الرحيل","عايد بن خليفة الشمري","محمد بن رمزان الهاجري","صالح آل الشيخ",
-    "عبد الرزاق البدر","محمد العنجري","عبد الرحمن الوكيل","محمد العقيل","فلاح مندكار",
-    "محمد بن ربيع المدخلي","جمال الحارثي","أسامة بن زيد المدخلي","مزمل فقيري",
-    "أبو بكر آداب","خالد عثمان المصري","عزيز فريحان","حمد العثمان","خالد بن عبد الرحمن الزكي",
-    "محمود شاكر","علي بن زيد المدخلي","البشير الإبراهيمي","عبد الحميد بن باديس",
-    "مبارك الميلي","الطيب العقبي","عادل الشوريجي","عادل السيد","صفي الرحمن المباركفوري",
-    "أبو عبد الأعلى المصري","تقي الدين الهلالي","نعمان الوتر","أبو أسامة مصطفى بن وقليل",
-    "سالم موريدا","عبد القادر بن محمد الجنيّد","صالح السندي","دغش العجمي","محمد غيث",
-    "علي الحذيفي","محمد بن زيد المدخلي","عبد محمد الإمام","صالح العصيمي","علي الحداد",
-    "عادل المشوري","عثمان السالمي","عادل منصور الباشا","محمد الفيفي","عبدالسلام السحيمي",
-    "صالح السحيمي","محمد بازمول","سعد الحصين","أحمد بازمول","عبد الرزاق حمزة",
-    "ابراهيم محمد كشيدان","سعد بن ناصر الشثري","عبد السلام الشويعر","عبد الله الوصابي",
+# قائمة الموديلات البديلة (ترتيب التجربة: الأول يُجرَّب أولاً)
+DEFAULT_MODELS = [
+    os.getenv("GEMINI_MODEL", "models/gemini-1.5"),   # موديل افتراضي من عندك
+    "models/gemini-2.0-flash",
+    "models/gemini-2.0",
+    "models/gemini-1.5-flash",
 ]
 
-if genai and GEMINI_API_KEY:
-    try:
-        genai.configure(api_key=GEMINI_API_KEY)
-        logger.info("Gemini configured (base model name: %s).", MODEL_NAME)
-    except Exception as e:
-        logger.warning("Gemini configure failed: %s", e)
-else:
-    logger.info("Gemini not available or GEMINI_API_KEY missing.")
-
-def load_prompt_file(path: str = "prompt.txt") -> str:
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            content = f.read()
-            return content.strip()
-    except FileNotFoundError:
-        logger.warning("prompt.txt not found. Using empty instructions.")
-        return ""
-
-def clean_text(s: str) -> str:
-    if not s:
-        return ""
-    return re.sub(r"\s+", " ", s).strip()
-
-def chunk_text(text: str, max_size: int = 3900) -> List[str]:
-    if not text:
-        return []
-    paragraphs = text.split("\n")
-    chunks = []
-    current = ""
-    for p in paragraphs:
-        if len(current) + len(p) + 1 <= max_size:
-            current += (p + "\n")
-        else:
-            if current:
-                chunks.append(current)
-            if len(p) > max_size:
-                for i in range(0, len(p), max_size):
-                    chunks.append(p[i:i + max_size])
-                current = ""
-            else:
-                current = p + "\n"
-    if current:
-        chunks.append(current)
-    return chunks
-
-def google_custom_search(query: str, num: int = 4) -> List[Dict]:
-    if not GOOGLE_API_KEY or not GOOGLE_CX:
-        return []
-    url = "https://www.googleapis.com/customsearch/v1"
-    params = {"key": GOOGLE_API_KEY, "cx": GOOGLE_CX, "q": query, "num": num}
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        return r.json().get("items", [])
-    except Exception as e:
-        logger.warning("Google search error for '%s': %s", query, e)
-        return []
-
-def youtube_search(query: str, max_results: int = 4) -> List[Dict]:
-    if not YOUTUBE_API_KEY:
-        return []
-    url = "https://www.googleapis.com/youtube/v3/search"
-    params = {"part": "snippet", "q": query, "key": YOUTUBE_API_KEY, "type": "video", "maxResults": max_results}
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        return r.json().get("items", [])
-    except Exception as e:
-        logger.warning("YouTube search error for '%s': %s", query, e)
-        return []
-
-def fetch_page_text(url: str) -> str:
-    try:
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; manhaj-bot/1.0)"}
-        r = requests.get(url, headers=headers, timeout=15)
-        r.raise_for_status()
-        soup = BeautifulSoup(r.text, "html.parser")
-        article = soup.find("article") or soup.find("main")
-        if article:
-            texts = [p.get_text(separator=" ", strip=True) for p in article.find_all(["p", "h1", "h2", "h3"])]
-            joined = "\n".join([t for t in texts if t])
-            if len(joined) > 200:
-                return clean_text(joined)
-        ps = [p.get_text(separator=" ", strip=True) for p in soup.find_all("p")]
-        joined = "\n".join([t for t in ps if t])
-        return clean_text(joined)
-    except Exception as e:
-        logger.debug("fetch_page_text error: %s", e)
-        return ""
-
-def safe_get_youtube_transcript(video_id: str, max_attempts: int = 4) -> str:
-    if YouTubeTranscriptApi is None:
-        return ""
-    wait = 1
-    for attempt in range(max_attempts):
-        try:
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id, languages=['ar', 'ar-SA', 'en'])
-            texts = [t["text"] for t in transcript_list]
-            return clean_text("\n".join(texts))
-        except (TranscriptsDisabled, NoTranscriptFound):
-            logger.info("No transcript available for video %s", video_id)
-            return ""
-        except Exception as e:
-            logger.info("Transcript attempt %d for %s failed: %s", attempt + 1, video_id, e)
-            time.sleep(wait)
-            wait *= 2
-    logger.info("Failed to get transcript for %s after retries.", video_id)
-    return ""
-
-def gemini_generate_text(instructions: str, user_prompt: str, max_tokens: int = 300, attempts: int = 3) -> Optional[str]:
-    if not genai or not GEMINI_API_KEY:
+def _extract_text_from_gl_response(j: dict) -> Optional[str]:
+    """
+    نحاول نفك شيفرة الـ JSON اللي يرجعها generativelanguage API
+    ونستخرج نص معقول. نرجع None إذا ما لقيناش حاجة.
+    """
+    if not isinstance(j, dict):
         return None
-    full_input = instructions + "\n\n" + user_prompt if instructions else user_prompt
-    for i in range(attempts):
-        try:
-            resp = genai.generate_text(model=MODEL_NAME, prompt=full_input, max_output_tokens=max_tokens)
-            text = getattr(resp, "text", None) or str(resp)
-            return text.strip()
-        except Exception as e:
-            logger.warning("Gemini call attempt %d failed: %s", i + 1, e)
-            time.sleep(1 + i * 1.2)
+
+    # حالة شائعة: "candidates" تحتوي على أجزاء نصية
+    if "candidates" in j and isinstance(j["candidates"], list):
+        parts = []
+        for c in j["candidates"]:
+            if isinstance(c, dict):
+                # بعض الاستجابات تحوي content -> list of parts -> text
+                if "content" in c and isinstance(c["content"], list):
+                    for p in c["content"]:
+                        if isinstance(p, dict) and "text" in p:
+                            parts.append(p["text"])
+                # أحيانًا الحقل اسمه output أو text مباشرة
+                if "output" in c and isinstance(c["output"], str):
+                    parts.append(c["output"])
+                if "text" in c and isinstance(c["text"], str):
+                    parts.append(c["text"])
+        if parts:
+            return "\n".join(parts)
+
+    # بعض الأشكال: outputs -> list -> content -> list -> { "text": ... }
+    if "outputs" in j and isinstance(j["outputs"], list):
+        parts = []
+        for out in j["outputs"]:
+            if isinstance(out, dict) and "content" in out and isinstance(out["content"], list):
+                for p in out["content"]:
+                    if isinstance(p, dict) and "text" in p:
+                        parts.append(p["text"])
+        if parts:
+            return "\n".join(parts)
+
+    # فالكهس: نجمع أي نصوص بسيطة موجودة داخل الـ JSON (احتياطي)
+    def _collect_strings(obj):
+        res = []
+        if isinstance(obj, str):
+            res.append(obj)
+        elif isinstance(obj, dict):
+            for v in obj.values():
+                res.extend(_collect_strings(v))
+        elif isinstance(obj, list):
+            for item in obj:
+                res.extend(_collect_strings(item))
+        return res
+
+    strings = _collect_strings(j)
+    if strings:
+        # نرجع أول نصوص معقولة (لا نطالع كل JSON)
+        joined = "\n".join(s for s in strings if len(s.strip()) > 10)
+        return joined[:10000] if joined else None
+
     return None
 
-def call_gemini_extract_keywords(instructions: str, user_text: str) -> List[str]:
-    prompt = "استخراج كلمات مفتاحية قصيرة مفيدة للبحث من النص التالي، رجعها مفصولة بفواصل:\n\n" + user_text
-    result = gemini_generate_text(instructions, prompt, max_tokens=120)
-    if result:
-        parts = re.split(r"[,؛\n]+", result)
-        keywords = [p.strip() for p in parts if p.strip()]
-        return keywords[:12]
-    words = re.findall(r"\b[^\W\d_]{4,}\b", user_text)
-    freq = {}
-    for w in words:
-        wlow = w.lower()
-        freq[wlow] = freq.get(wlow, 0) + 1
-    sorted_words = sorted(freq.items(), key=lambda x: -x[1])
-    return [w for w, _ in sorted_words[:8]]
 
-def call_gemini_classify_if_scholar(instructions: str, snippet: str, scholars: List[str]) -> Optional[str]:
-    prompt = (
-        "هل هذا النص أو العنوان ينتمي لفتوى أو كلام واحد من هذه القائمة من المشايخ؟ "
-        "أجب باسم الشيخ فقط إن كان من أحدهم، وإلا اكتب NONE.\n\n"
-        "قائمة المشايخ:\n" + "\n".join(scholars) + "\n\n"
-        f"النص/العنوان:\n{snippet}\n\n"
-        "أجب باسم الشيخ أو NONE."
-    )
-    result = gemini_generate_text(instructions, prompt, max_tokens=80)
-    if result:
-        text_up = result.upper()
-        if "NONE" in text_up:
-            return None
-        for s in scholars:
-            if s in result:
-                return s
-            if s.lower() in result.lower():
-                return s
-    snip_low = snippet.lower()
-    for s in scholars:
-        if s.lower() in snip_low:
-            return s
+def _call_gl_rest(model: str, prompt: str, max_tokens: int = 600, timeout: int = 20) -> Optional[str]:
+    """
+    نادِ API مباشرة (REST) على endpoint الخاص بـ Generative Language:
+    https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent
+    نستخدم X-goog-api-key لرأس الطلب.
+    """
+    if not GEMINI_API_KEY:
+        logger.debug("GEMINI_API_KEY not set; skipping REST call.")
+        return None
+
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+    headers = {
+        "Content-Type": "application/json",
+        "X-goog-api-key": GEMINI_API_KEY,
+    }
+    payload = {
+        "contents": [
+            {
+                "parts": [
+                    {"text": prompt}
+                ]
+            }
+        ],
+        # ممكن تضيف هنا إعدادات أخرى لو تحب، مثل "maxOutputTokens" بشرط أن الـ endpoint يدعمها
+    }
+
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=timeout)
+    except Exception as e:
+        logger.warning("REST request to model %s failed: %s", model, e)
+        return None
+
+    if resp.status_code != 200:
+        logger.warning("Model %s REST returned status %s: %s", model, resp.status_code, resp.text[:300])
+        return None
+
+    try:
+        j = resp.json()
+    except Exception as e:
+        logger.warning("Failed to parse JSON from model %s response: %s", model, e)
+        return None
+
+    text = _extract_text_from_gl_response(j)
+    if text:
+        logger.info("Got text from REST model %s (len=%d)", model, len(text))
+    return text
+
+
+def gemini_fallback_generate(instructions: str, user_prompt: str, max_tokens: int = 600,
+                             attempts_per_model: int = 2, models: Optional[List[str]] = None) -> Optional[str]:
+    """
+    دالة مركزية: تحاول تستخدم:
+      1) أولًا مكتبة google.generativeai لو موجودة (genai.generate_text) مع MODEL_NAME
+      2) لو فشلت أو غير متاحة، تجرب REST على قائمة الموديلات البديلة (DEFAULT_MODELS أو اللي تمرره)
+    ترجع النص المستخرج أو None لو كلشي فشل.
+    """
+    full_prompt = (instructions + "\n\n" + user_prompt).strip() if instructions else user_prompt
+    models_to_try = models or DEFAULT_MODELS
+
+    # 1) محاولة باستخدام مكتبة genai (لو متاحة)
+    if genai and GEMINI_API_KEY:
+        for attempt in range(attempts_per_model):
+            try:
+                logger.debug("Trying genai.generate_text attempt %d on model %s", attempt + 1, models_to_try[0])
+                resp = genai.generate_text(model=models_to_try[0], prompt=full_prompt, max_output_tokens=max_tokens)
+                text = getattr(resp, "text", None) or str(resp)
+                if text:
+                    logger.info("genai.generate_text succeeded on model %s", models_to_try[0])
+                    return text.strip()
+            except Exception as e:
+                logger.warning("Gemini call attempt %d failed: %s", attempt + 1, e)
+                # لو الخطأ 404 أو 'Requested entity was not found' نخليها تجرب الموديلات البديلة مباشرة
+                # نستمر بالمحاولات القليلة قبل الانتقال
+                time.sleep(0.6 + attempt * 0.8)
+
+    # 2) تجربة REST على كل موديل بديل
+    for model in models_to_try:
+        # نعمل retries بسيطة لكل موديل
+        wait = 1.0
+        for att in range(attempts_per_model):
+            logger.debug("Trying REST model %s attempt %d", model, att + 1)
+            text = _call_gl_rest(model, full_prompt, max_tokens=max_tokens)
+            if text:
+                return text.strip()
+            time.sleep(wait)
+            wait *= 2.0
+
+    # كل المحاولات فشلت
+    logger.warning("All Gemini models failed (tried: %s)", models_to_try)
     return None
 
-async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_text = (update.message.text or "").strip()
-    if not user_text:
-        return
-    logger.info("Received: %s", user_text)
 
-    instructions = load_prompt_file()
-
-    keywords = call_gemini_extract_keywords(instructions, user_text)
-    logger.info("Keywords: %s", keywords)
-
-    search_queries = [user_text] + [f"{user_text} {k}" for k in keywords[:3]]
-
-    google_results = []
-    youtube_results = []
-    for q in search_queries[:3]:
-        g = await asyncio.get_event_loop().run_in_executor(None, google_custom_search, q, 3)
-        y = await asyncio.get_event_loop().run_in_executor(None, youtube_search, q, 3)
-        google_results.extend(g or [])
-        youtube_results.extend(y or [])
-        await asyncio.sleep(0.6)
-
-    matched_entries = []
-
-    for g in google_results:
-        title = g.get("title", "")
-        snippet = g.get("snippet", "") or ""
-        link = g.get("link") or g.get("formattedUrl") or ""
-        preview = f"{title}\n{snippet}\n{link}"
-        scholar = call_gemini_classify_if_scholar(instructions, preview, SCHOLARS)
-        if not scholar:
-            continue
-        page_text = await asyncio.get_event_loop().run_in_executor(None, fetch_page_text, link)
-        if not page_text:
-            page_text = snippet or title
-        matched_entries.append({"scholar": scholar, "title": title or snippet, "text": page_text, "link": link})
-
-    for y in youtube_results:
-        snippet = y.get("snippet", {}) or {}
-        title = snippet.get("title", "")
-        description = snippet.get("description", "") or ""
-        vid_id = None
-        id_field = y.get("id")
-        if isinstance(id_field, dict):
-            vid_id = id_field.get("videoId")
-        elif isinstance(id_field, str):
-            vid_id = id_field
-        link = f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""
-        preview = f"{title}\n{description}\n{link}"
-        scholar = call_gemini_classify_if_scholar(instructions, preview, SCHOLARS)
-        if not scholar:
-            continue
-        transcript = ""
-        if vid_id:
-            transcript = await asyncio.get_event_loop().run_in_executor(None, safe_get_youtube_transcript, vid_id)
-        final_text = transcript or description or title
-        matched_entries.append({"scholar": scholar, "title": title or "video", "text": final_text, "link": link})
-
-    if not matched_entries:
-        await update.message.reply_text("ما لقيتش فتوى لأي من المشايخ في قائمتي. حاول تصوغ السؤال بطريقة أخرى.")
-        return
-
-    for entry in matched_entries:
-        header = f"{entry['scholar']} – {entry['title']} –\n"
-        body = entry['text'] or ""
-        footer = f"\n\n{entry['link']}"
-        full = header + body + footer
-        for chunk in chunk_text(full):
-            await update.message.reply_text(chunk)
-
-async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("بسم الله، بوت المنهج حاضر. اكتب سؤالك.")
-
-def main():
-    if not TELEGRAM_TOKEN:
-        logger.error("TELEGRAM_TOKEN not set.")
-        return
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    app.add_handler(CommandHandler("start", start_cmd))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
-
-    port = int(os.environ.get("PORT", 8080))
-    external_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("EXTERNAL_HOSTNAME")
-    webhook_url = f"https://{external_host}/{TELEGRAM_TOKEN}" if external_host else None
-
-    if webhook_url:
-        logger.info("Starting webhook on port %s", port)
-        app.run_webhook(listen="0.0.0.0", port=port, url_path=TELEGRAM_TOKEN, webhook_url=webhook_url)
-    else:
-        logger.info("No external host found, starting polling.")
-        app.run_polling()
-
+# ===== مثال للاستخدام داخل البوت (توضيحي) =====
 if __name__ == "__main__":
-    main()
+    # مثال بسيط: لو شغلت الملف لوحده
+    instr = "كن صريحًا باللهجة السلفية، ركّز على استخراج كلمات مفتاحية للبحث."
+    prompt = "ماهو حكم العب بفري فاير"
+    out = gemini_fallback_generate(instr, prompt)
+    print(">>>> RESULT:\n", out or "<no result>")
