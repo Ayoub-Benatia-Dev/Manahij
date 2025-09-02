@@ -1,8 +1,4 @@
 # bot.py
-# بوت تليجرام متكامل: يقرأ prompt.txt => يوجه Gemini => يبحث في Google + YouTube => يفلتر على المشايخ => يجيب النص الأصلي
-# متطلبات: TELEGRAM_TOKEN, GOOGLE_API_KEY, GOOGLE_CX, YOUTUBE_API_KEY, GEMINI_API_KEY (env vars)
-# Start: python bot.py
-
 import os
 import re
 import time
@@ -16,13 +12,11 @@ from bs4 import BeautifulSoup
 from telegram import Update
 from telegram.ext import Application, ContextTypes, CommandHandler, MessageHandler, filters
 
-# محاولة استيراد مكتبة Gemini الرسمية (google.generativeai)
 try:
     import google.generativeai as genai
 except Exception:
     genai = None
 
-# محاولة استيراد youtube_transcript_api
 try:
     from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 except Exception:
@@ -30,21 +24,17 @@ except Exception:
     TranscriptsDisabled = Exception
     NoTranscriptFound = Exception
 
-# ---------------- Config ----------------
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
 GOOGLE_CX = os.getenv("GOOGLE_CX")
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Important: model name MUST start with "models/" or "tunedModels/"
 MODEL_NAME = os.getenv("GEMINI_MODEL", "models/gemini-1.5")
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Scholars list (عدلها كيما تحب)
 SCHOLARS = [
     "ربيع المدخلي","عبيد الجابري","صالح الفوزان","صالح اللاحيدان","عبدالمحسن العباد",
     "محمد بن هادي المدخلي","عبد العزيز آل الشيخ","محمد سعيد رسلان","البرعي","عبد الرزاق عفيفي",
@@ -63,7 +53,6 @@ SCHOLARS = [
     "ابراهيم محمد كشيدان","سعد بن ناصر الشثري","عبد السلام الشويعر","عبد الله الوصابي",
 ]
 
-# ---------------- Init Gemini ----------------
 if genai and GEMINI_API_KEY:
     try:
         genai.configure(api_key=GEMINI_API_KEY)
@@ -73,7 +62,6 @@ if genai and GEMINI_API_KEY:
 else:
     logger.info("Gemini not available or GEMINI_API_KEY missing.")
 
-# ---------------- Prompt file loader ----------------
 def load_prompt_file(path: str = "prompt.txt") -> str:
     try:
         with open(path, "r", encoding="utf-8") as f:
@@ -83,7 +71,6 @@ def load_prompt_file(path: str = "prompt.txt") -> str:
         logger.warning("prompt.txt not found. Using empty instructions.")
         return ""
 
-# ---------------- Utilities ----------------
 def clean_text(s: str) -> str:
     if not s:
         return ""
@@ -111,7 +98,6 @@ def chunk_text(text: str, max_size: int = 3900) -> List[str]:
         chunks.append(current)
     return chunks
 
-# ---------------- Search functions ----------------
 def google_custom_search(query: str, num: int = 4) -> List[Dict]:
     if not GOOGLE_API_KEY or not GOOGLE_CX:
         return []
@@ -138,7 +124,6 @@ def youtube_search(query: str, max_results: int = 4) -> List[Dict]:
         logger.warning("YouTube search error for '%s': %s", query, e)
         return []
 
-# ---------------- Fetch page text ----------------
 def fetch_page_text(url: str) -> str:
     try:
         headers = {"User-Agent": "Mozilla/5.0 (compatible; manhaj-bot/1.0)"}
@@ -158,7 +143,6 @@ def fetch_page_text(url: str) -> str:
         logger.debug("fetch_page_text error: %s", e)
         return ""
 
-# ---------------- YouTube transcript safe ----------------
 def safe_get_youtube_transcript(video_id: str, max_attempts: int = 4) -> str:
     if YouTubeTranscriptApi is None:
         return ""
@@ -178,11 +162,7 @@ def safe_get_youtube_transcript(video_id: str, max_attempts: int = 4) -> str:
     logger.info("Failed to get transcript for %s after retries.", video_id)
     return ""
 
-# ---------------- Gemini wrappers (تستخدم prompt_file) ----------------
 def gemini_generate_text(instructions: str, user_prompt: str, max_tokens: int = 300, attempts: int = 3) -> Optional[str]:
-    """
-    Send instructions (from prompt.txt) + user_prompt to Gemini and return text.
-    """
     if not genai or not GEMINI_API_KEY:
         return None
     full_input = instructions + "\n\n" + user_prompt if instructions else user_prompt
@@ -196,4 +176,136 @@ def gemini_generate_text(instructions: str, user_prompt: str, max_tokens: int = 
             time.sleep(1 + i * 1.2)
     return None
 
-def call_gemini_extract_keywords(instru_
+def call_gemini_extract_keywords(instructions: str, user_text: str) -> List[str]:
+    prompt = "استخراج كلمات مفتاحية قصيرة مفيدة للبحث من النص التالي، رجعها مفصولة بفواصل:\n\n" + user_text
+    result = gemini_generate_text(instructions, prompt, max_tokens=120)
+    if result:
+        parts = re.split(r"[,؛\n]+", result)
+        keywords = [p.strip() for p in parts if p.strip()]
+        return keywords[:12]
+    words = re.findall(r"\b[^\W\d_]{4,}\b", user_text)
+    freq = {}
+    for w in words:
+        wlow = w.lower()
+        freq[wlow] = freq.get(wlow, 0) + 1
+    sorted_words = sorted(freq.items(), key=lambda x: -x[1])
+    return [w for w, _ in sorted_words[:8]
+
+def call_gemini_classify_if_scholar(instructions: str, snippet: str, scholars: List[str]) -> Optional[str]:
+    prompt = (
+        "هل هذا النص أو العنوان ينتمي لفتوى أو كلام واحد من هذه القائمة من المشايخ؟ "
+        "أجب باسم الشيخ فقط إن كان من أحدهم، وإلا اكتب NONE.\n\n"
+        "قائمة المشايخ:\n" + "\n".join(scholars) + "\n\n"
+        f"النص/العنوان:\n{snippet}\n\n"
+        "أجب باسم الشيخ أو NONE."
+    )
+    result = gemini_generate_text(instructions, prompt, max_tokens=80)
+    if result:
+        text_up = result.upper()
+        if "NONE" in text_up:
+            return None
+        for s in scholars:
+            if s in result:
+                return s
+            if s.lower() in result.lower():
+                return s
+    snip_low = snippet.lower()
+    for s in scholars:
+        if s.lower() in snip_low:
+            return s
+    return None
+
+async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_text = (update.message.text or "").strip()
+    if not user_text:
+        return
+    logger.info("Received: %s", user_text)
+
+    instructions = load_prompt_file()
+
+    keywords = call_gemini_extract_keywords(instructions, user_text)
+    logger.info("Keywords: %s", keywords)
+
+    search_queries = [user_text] + [f"{user_text} {k}" for k in keywords[:3]]
+
+    google_results = []
+    youtube_results = []
+    for q in search_queries[:3]:
+        g = await asyncio.get_event_loop().run_in_executor(None, google_custom_search, q, 3)
+        y = await asyncio.get_event_loop().run_in_executor(None, youtube_search, q, 3)
+        google_results.extend(g or [])
+        youtube_results.extend(y or [])
+        await asyncio.sleep(0.6)
+
+    matched_entries = []
+
+    for g in google_results:
+        title = g.get("title", "")
+        snippet = g.get("snippet", "") or ""
+        link = g.get("link") or g.get("formattedUrl") or ""
+        preview = f"{title}\n{snippet}\n{link}"
+        scholar = call_gemini_classify_if_scholar(instructions, preview, SCHOLARS)
+        if not scholar:
+            continue
+        page_text = await asyncio.get_event_loop().run_in_executor(None, fetch_page_text, link)
+        if not page_text:
+            page_text = snippet or title
+        matched_entries.append({"scholar": scholar, "title": title or snippet, "text": page_text, "link": link})
+
+    for y in youtube_results:
+        snippet = y.get("snippet", {}) or {}
+        title = snippet.get("title", "")
+        description = snippet.get("description", "") or ""
+        vid_id = None
+        id_field = y.get("id")
+        if isinstance(id_field, dict):
+            vid_id = id_field.get("videoId")
+        elif isinstance(id_field, str):
+            vid_id = id_field
+        link = f"https://www.youtube.com/watch?v={vid_id}" if vid_id else ""
+        preview = f"{title}\n{description}\n{link}"
+        scholar = call_gemini_classify_if_scholar(instructions, preview, SCHOLARS)
+        if not scholar:
+            continue
+        transcript = ""
+        if vid_id:
+            transcript = await asyncio.get_event_loop().run_in_executor(None, safe_get_youtube_transcript, vid_id)
+        final_text = transcript or description or title
+        matched_entries.append({"scholar": scholar, "title": title or "video", "text": final_text, "link": link})
+
+    if not matched_entries:
+        await update.message.reply_text("ما لقيتش فتوى لأي من المشايخ في قائمتي. حاول تصوغ السؤال بطريقة أخرى.")
+        return
+
+    for entry in matched_entries:
+        header = f"{entry['scholar']} – {entry['title']} –\n"
+        body = entry['text'] or ""
+        footer = f"\n\n{entry['link']}"
+        full = header + body + footer
+        for chunk in chunk_text(full):
+            await update.message.reply_text(chunk)
+
+async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("بسم الله، بوت المنهج حاضر. اكتب سؤالك.")
+
+def main():
+    if not TELEGRAM_TOKEN:
+        logger.error("TELEGRAM_TOKEN not set.")
+        return
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
+
+    port = int(os.environ.get("PORT", 8080))
+    external_host = os.environ.get("RENDER_EXTERNAL_HOSTNAME") or os.environ.get("EXTERNAL_HOSTNAME")
+    webhook_url = f"https://{external_host}/{TELEGRAM_TOKEN}" if external_host else None
+
+    if webhook_url:
+        logger.info("Starting webhook on port %s", port)
+        app.run_webhook(listen="0.0.0.0", port=port, url_path=TELEGRAM_TOKEN, webhook_url=webhook_url)
+    else:
+        logger.info("No external host found, starting polling.")
+        app.run_polling()
+
+if __name__ == "__main__":
+    main()
