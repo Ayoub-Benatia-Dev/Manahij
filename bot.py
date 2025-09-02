@@ -1,145 +1,143 @@
-# -*- coding: utf-8 -*-
-
-# بوت تلجرام للبحث في جوجل ويوتيوب
-# هذا الكود يستخدم مكتبة python-telegram-bot
-# ومكتبة google-api-python-client للبحث الرسمي
-# ومكتبة requests للتفاعل مع Gemini API
-
-# --- المتطلبات (Requirements) ---
-# يجب عليك تحديث ملف "requirements.txt" ليتضمن المكتبات الجديدة.
-# يجب أن يحتوي على السطور التالية:
-# python-telegram-bot
-# google-api-python-client
-# requests
-# uvicorn
-
-# --- الحصول على مفاتيح API ---
-# 1. مفتاح بوت التلجرام:
-#    يُمكنك الحصول عليه من @BotFather.
-# 2. مفتاح Google API و Google CX (Custom Search ID):
-#    تحتاج إلى تفعيل Google Custom Search API من Google Cloud Console.
-#    وإنشاء محرك بحث مخصص (Custom Search Engine) للحصول على مفتاح CX.
-# 3. مفتاح YouTube API:
-#    يُمكنك الحصول عليه من Google Cloud Console بعد تفعيل YouTube Data API.
-# 4. مفتاح Gemini API:
-#    يُمكنك الحصول عليه من Google AI Studio.
-
-# ملاحظة: أفضل طريقة لتخزين هذه المفاتيح هي كمتغيرات بيئة على Render.com.
-# لقد قمنا بتحديث الكود لاستخدام os.getenv() لجلبها.
-
-import logging
 import os
 import requests
 import json
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import Application, CommandHandler, ContextTypes
 from googleapiclient.discovery import build
 
-# إعدادات التسجيل لتتبع ما يحدث في البوت
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# --- Variables and API Key Setup ---
+# The keys will be loaded securely from environment variables on Render.com.
+# Be sure to set them in the Render.com dashboard.
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
+YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
+GOOGLE_CX = os.environ.get("GOOGLE_CX")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
-logger = logging.getLogger(__name__)
+# --- Gemini API Call Function ---
+def format_results_with_gemini(prompt_text, search_type):
+    """
+    Sends search results to the Gemini API for formatting and summarization.
+    """
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
+    headers = {'Content-Type': 'application/json'}
+    payload = {
+        "contents": [{
+            "parts": [{
+                "text": f"كمساعد ذكي، قم بتلخيص وتنظيم نتائج البحث التالية لـ {search_type} في قائمة واضحة ومختصرة.\n\nالنتائج الخام:\n{prompt_text}"
+            }]
+        }],
+        "tools": [{"google_search": {}}]
+    }
 
-# استيراد مفاتيح API من متغيرات البيئة.
-# القيم الافتراضية هنا هي لأغراض الاختبار فقط.
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", "8367431259:AAEa_O2BzOQ6cpgX4rdOS3SiTKdvMbWAtQM")
-GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "AIzaSyDCay69bExFEAt4y7XEiSK1WmG6KB5l-yw")
-GOOGLE_CX = os.getenv("GOOGLE_CX", "369d6d61d01414942")
-YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "AIzaSyBMa4CY_Ndc6RDq2uIDO0nZvhtxvsdF4h4")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AIzaSyDGS38J3w0t5cSKXwAQWBG_GUkJL8wdA14")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.environ.get('PORT', '8443'))
+    try:
+        response = requests.post(f"{url}?key={GEMINI_API_KEY}", headers=headers, data=json.dumps(payload))
+        response.raise_for_status()  # This will raise an HTTPError if the response was an error
+        result = response.json()
+        formatted_text = result['candidates'][0]['content']['parts'][0]['text']
+        return formatted_text
+    except requests.exceptions.RequestException as e:
+        print(f"Error calling Gemini API: {e}")
+        return f"حدث خطأ في معالجة النتائج. قد لا تكون النتائج مرتبة بشكل جيد. {prompt_text}"
+    except (KeyError, IndexError):
+        print("Gemini API response format is not as expected.")
+        return f"تعذر تنسيق النتائج من قبل Gemini. إليك النتائج الخام:\n{prompt_text}"
 
-# دالة للرد على أمر /start
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """ترحب بالمستخدم وتشرح كيفية استخدام البوت."""
-    user_name = update.effective_user.first_name
-    await update.message.reply_text(
-        f"أهلاً بك يا {user_name}!\n"
-        "يمكنك استخدام الأوامر التالية للبحث:\n"
-        "1. /google [عبارة البحث]\n"
-        "2. /youtube [عبارة البحث]\n\n"
-        "مثال: /google أفضل طريقة لتعلم بايثون"
-    )
 
-# دالة للبحث في جوجل باستخدام Google Custom Search API
-async def google_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """يبحث في جوجل عن النص الذي يكتبه المستخدم ويرسل النتائج."""
+# --- Command Handlers ---
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles the /start command.
+    """
+    await update.message.reply_text("مرحباً بك! أنا بوت للبحث. \n\nاستخدم: \n/google [عبارة البحث] \n/youtube [عبارة البحث]")
+
+async def google_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles the /google command and performs a Google search.
+    """
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("يرجى إدخال عبارة البحث بعد أمر /google.")
+        await update.message.reply_text("الرجاء إدخال عبارة بحث بعد الأمر /google.")
         return
-        
-    await update.message.reply_text(f"جاري البحث في جوجل عن: '{query}'...")
+
+    await update.message.reply_text(f"جاري البحث عن: '{query}'...")
 
     try:
         service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
-        res = service.cse().list(q=query, cx=GOOGLE_CX, num=5).execute()
+        res = service.cse().list(q=query, cx=GOOGLE_CX).execute()
         
-        if "items" in res:
-            response_message = f"أفضل 5 نتائج لجوجل عن '{query}':\n\n"
-            for item in res["items"]:
-                title = item.get("title", "لا يوجد عنوان")
-                link = item.get("link", "#")
-                snippet = item.get("snippet", "لا يوجد وصف")
-                response_message += f"**{title}**\n{snippet}\n[الرابط]({link})\n\n"
-
-            await update.message.reply_markdown_v2(
-                response_message,
-                disable_web_page_preview=True
-            )
+        raw_results = ""
+        if 'items' in res:
+            for item in res['items']:
+                raw_results += f"العنوان: {item.get('title', 'لا يوجد عنوان')}\n"
+                raw_results += f"الرابط: {item.get('link', 'لا يوجد رابط')}\n"
+                raw_results += f"المقتطف: {item.get('snippet', 'لا يوجد مقتطف')}\n\n"
         else:
-            await update.message.reply_text("عذرًا، لم يتم العثور على أي نتائج.")
+            await update.message.reply_text("لم يتم العثور على نتائج لبحثك في جوجل.")
+            return
+
+        formatted_results = format_results_with_gemini(raw_results, "Google")
+        await update.message.reply_text(formatted_results)
 
     except Exception as e:
-        logger.error(f"خطأ أثناء البحث في جوجل: {e}")
-        await update.message.reply_text("عذرًا، حدث خطأ أثناء البحث. يرجى التأكد من أن مفاتيح API صحيحة.")
+        await update.message.reply_text(f"عذراً، حدث خطأ أثناء البحث في جوجل. الرجاء المحاولة لاحقاً.\nالخطأ: {e}")
 
-
-# دالة للبحث في يوتيوب باستخدام YouTube Data API
-async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """يبحث في يوتيوب عن النص الذي يكتبه المستخدم ويرسل الروابط."""
+async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    Handles the /youtube command and performs a YouTube search.
+    """
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("يرجى إدخال عبارة البحث بعد أمر /youtube.")
+        await update.message.reply_text("الرجاء إدخال عبارة بحث بعد الأمر /youtube.")
         return
 
-    await update.message.reply_text(f"جاري البحث في يوتيوب عن: '{query}'...")
+    await update.message.reply_text(f"جاري البحث عن مقاطع فيديو لـ: '{query}'...")
 
     try:
-        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-        request = youtube.search().list(
+        service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+        res = service.search().list(
             q=query,
-            part="snippet",
-            type="video",
+            part="id,snippet",
             maxResults=5
-        )
-        response = request.execute()
-        
-        if "items" in response:
-            response_message = f"أفضل 5 نتائج ليوتيوب عن '{query}':\n\n"
-            for item in response["items"]:
-                title = item["snippet"]["title"]
-                video_id = item["id"]["videoId"]
-                link = f"https://www.youtube.com/watch?v={video_id}"
-                response_message += f"**{title}**\nالرابط: {link}\n\n"
-            
-            await update.message.reply_text(response_message)
+        ).execute()
+
+        raw_results = ""
+        if 'items' in res:
+            for item in res['items']:
+                if item['id']['kind'] == 'youtube#video':
+                    raw_results += f"العنوان: {item['snippet']['title']}\n"
+                    raw_results += f"الرابط: https://www.youtube.com/watch?v={item['id']['videoId']}\n"
+                    raw_results += f"الوصف: {item['snippet']['description']}\n\n"
         else:
-            await update.message.reply_text("عذرًا، لم يتم العثور على أي نتائج.")
-
+            await update.message.reply_text("لم يتم العثور على نتائج لبحثك في يوتيوب.")
+            return
+        
+        formatted_results = format_results_with_gemini(raw_results, "YouTube")
+        await update.message.reply_text(formatted_results)
+    
     except Exception as e:
-        logger.error(f"خطأ أثناء البحث في يوتيوب: {e}")
-        await update.message.reply_text("عذرًا، حدث خطأ أثناء البحث. يرجى التأكد من أن مفاتيح API صحيحة.")
+        await update.message.reply_text(f"عذراً، حدث خطأ أثناء البحث في يوتيوب. الرجاء المحاولة لاحقاً.\nالخطأ: {e}")
 
 
-# إعداد تطبيق التلجرام
-application = Application.builder().token(TELEGRAM_TOKEN).build()
+# --- Main Function ---
+def main():
+    """
+    Main function to run the bot.
+    """
+    if not TELEGRAM_TOKEN or not GOOGLE_API_KEY or not YOUTUBE_API_KEY or not GOOGLE_CX or not GEMINI_API_KEY:
+        print("خطأ: يرجى إعداد جميع متغيرات البيئة قبل التشغيل.")
+        return
+        
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Add command handlers
+    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("google", google_search_command))
+    application.add_handler(CommandHandler("youtube", youtube_search_command))
 
-# إضافة الأوامر (Handlers)
-application.add_handler(CommandHandler("start", start_command))
-application.add_handler(CommandHandler("google", google_search_command))
-application.add_handler(CommandHandler("youtube", youtube_search_command))
+    print("بدأ البوت بنجاح...")
+    application.run_polling()
+
+
+if __name__ == "__main__":
+    main()
