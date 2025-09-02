@@ -136,8 +136,7 @@ async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("عذرًا، حدث خطأ أثناء البحث. يرجى التأكد من أن مفاتيح API صحيحة.")
 
 
-# إعداد تطبيق التلجرام مباشرة
-# هذا هو التطبيق الذي سيتم تشغيله بواسطة uvicorn
+# إعداد تطبيق التلجرام
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # إضافة الأوامر (Handlers)
