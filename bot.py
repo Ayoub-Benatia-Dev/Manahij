@@ -1,7 +1,6 @@
 import os
 import requests
 import json
-import asyncio
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from googleapiclient.discovery import build
@@ -102,7 +101,7 @@ async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(f"خطأ أثناء البحث في يوتيوب: {e}")
 
 # --- Main Function ---
-async def main():
+def main():
     if not TELEGRAM_TOKEN:
         print("خطأ: لم يتم ضبط TELEGRAM_TOKEN")
         return
@@ -113,7 +112,7 @@ async def main():
     application.add_handler(CommandHandler("youtube", youtube_search_command))
 
     # Webhook mode
-    await application.run_webhook(
+    application.run_webhook(
         listen="0.0.0.0",
         port=PORT,
         url_path=TELEGRAM_TOKEN,
@@ -121,4 +120,4 @@ async def main():
     )
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
