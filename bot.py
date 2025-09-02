@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 
-# بوت تلجرام للبحث في جوجل ويوتيوب باستخدام Gemini
+# بوت تلجرام للبحث في جوجل ويوتيوب
 # هذا الكود يستخدم مكتبة python-telegram-bot
 # ومكتبة google-api-python-client للبحث الرسمي
 # ومكتبة requests للتفاعل مع Gemini API
