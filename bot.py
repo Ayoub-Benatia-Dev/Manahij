@@ -1,4 +1,3 @@
-
 import logging
 import os
 import requests
@@ -183,6 +182,7 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 # إعداد تطبيق التلجرام مباشرة
+# هذا هو التطبيق الذي سيتم تشغيله بواسطة uvicorn
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 
 # إضافة الأوامر (Handlers)
