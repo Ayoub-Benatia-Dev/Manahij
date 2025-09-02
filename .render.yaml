@@ -1,7 +1,0 @@
-type: web
-name: manhaj-bot
-env: python
-buildCommand: "pip install -r requirements.txt"
-startCommand: "python3 bot.py"
-plan: free
-numInstances: 1
