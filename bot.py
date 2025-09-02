@@ -13,6 +13,10 @@ YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
 GOOGLE_CX = os.environ.get("GOOGLE_CX")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
+# لازم تضيفها في Settings تاع Render
+PORT = int(os.environ.get("PORT", 10000))
+RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")  # مثال: https://manahij.onrender.com
+
 # --- Gemini API Call Function ---
 def format_results_with_gemini(prompt_text, search_type):
     url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
@@ -34,7 +38,7 @@ def format_results_with_gemini(prompt_text, search_type):
     except requests.exceptions.RequestException as e:
         return f"حدث خطأ في معالجة النتائج. {e}"
     except (KeyError, IndexError):
-        return f"تعذر تنسيق النتائج من قبل Gemini. النتائج الخام:\n{prompt_text}"
+        return f"تعذر تنسيق النتائج من Gemini. النتائج الخام:\n{prompt_text}"
 
 # --- Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,8 +112,13 @@ async def main():
     application.add_handler(CommandHandler("google", google_search_command))
     application.add_handler(CommandHandler("youtube", youtube_search_command))
 
-    print("بدأ البوت بنجاح...")
-    await application.run_polling()
+    # Webhook mode
+    await application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=f"{RENDER_EXTERNAL_URL}/{TELEGRAM_TOKEN}"
+    )
 
 if __name__ == "__main__":
     asyncio.run(main())
