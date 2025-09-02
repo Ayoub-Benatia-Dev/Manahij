@@ -1,3 +1,32 @@
+# -*- coding: utf-8 -*-
+
+# بوت تلجرام للبحث في جوجل ويوتيوب باستخدام Gemini
+# هذا الكود يستخدم مكتبة python-telegram-bot
+# ومكتبة google-api-python-client للبحث الرسمي
+# ومكتبة requests للتفاعل مع Gemini API
+
+# --- المتطلبات (Requirements) ---
+# يجب عليك تحديث ملف "requirements.txt" ليتضمن المكتبات الجديدة.
+# يجب أن يحتوي على السطور التالية:
+# python-telegram-bot
+# google-api-python-client
+# requests
+# uvicorn
+
+# --- الحصول على مفاتيح API ---
+# 1. مفتاح بوت التلجرام:
+#    يُمكنك الحصول عليه من @BotFather.
+# 2. مفتاح Google API و Google CX (Custom Search ID):
+#    تحتاج إلى تفعيل Google Custom Search API من Google Cloud Console.
+#    وإنشاء محرك بحث مخصص (Custom Search Engine) للحصول على مفتاح CX.
+# 3. مفتاح YouTube API:
+#    يُمكنك الحصول عليه من Google Cloud Console بعد تفعيل YouTube Data API.
+# 4. مفتاح Gemini API:
+#    يُمكنك الحصول عليه من Google AI Studio.
+
+# ملاحظة: أفضل طريقة لتخزين هذه المفاتيح هي كمتغيرات بيئة على Render.com.
+# لقد قمنا بتحديث الكود لاستخدام os.getenv() لجلبها.
+
 import logging
 import os
 import requests
@@ -115,16 +144,3 @@ application = Application.builder().token(TELEGRAM_TOKEN).build()
 application.add_handler(CommandHandler("start", start_command))
 application.add_handler(CommandHandler("google", google_search_command))
 application.add_handler(CommandHandler("youtube", youtube_search_command))
-
-# تشغيل البوت باستخدام الـ Webhook
-if WEBHOOK_URL:
-    application.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=WEBHOOK_URL
-    )
-else:
-    # في حال لم يتم العثور على رابط الـ Webhook، استخدم طريقة Polling كخيار احتياطي
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
-    print("البوت يعمل الآن باستخدام Polling...")
