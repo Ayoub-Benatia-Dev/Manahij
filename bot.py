@@ -189,7 +189,7 @@ def call_gemini_extract_keywords(instructions: str, user_text: str) -> List[str]
         wlow = w.lower()
         freq[wlow] = freq.get(wlow, 0) + 1
     sorted_words = sorted(freq.items(), key=lambda x: -x[1])
-    return [w for w, _ in sorted_words[:8]
+    return [w for w, _ in sorted_words[:8]]
 
 def call_gemini_classify_if_scholar(instructions: str, snippet: str, scholars: List[str]) -> Optional[str]:
     prompt = (
