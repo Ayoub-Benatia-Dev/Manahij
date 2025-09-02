@@ -4,14 +4,6 @@ import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 from googleapiclient.discovery import build
-import logging
-
-# Set up logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
-logger = logging.getLogger(__name__)
 
 # --- Variables and API Key Setup ---
 # The keys will be loaded securely from environment variables on Render.com.
@@ -27,37 +19,30 @@ def format_results_with_gemini(prompt_text, search_type):
     """
     Sends search results to the Gemini API for formatting and summarization.
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={GEMINI_API_KEY}"
+    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
     headers = {'Content-Type': 'application/json'}
-    
-    # Check if a specific search tool is needed based on search_type
-    if search_type == "Google":
-        prompt_with_instructions = f"كمساعد ذكي، قم بتلخيص وتنظيم نتائج البحث التالية لـ {search_type} في قائمة واضحة ومختصرة.\n\nالنتائج الخام:\n{prompt_text}"
-    elif search_type == "YouTube":
-        prompt_with_instructions = f"كمساعد ذكي، قم بتلخيص وتنظيم نتائج البحث التالية لـ {search_type} في قائمة واضحة ومختصرة.\n\nالنتائج الخام:\n{prompt_text}"
-    else:
-        prompt_with_instructions = prompt_text
-
     payload = {
         "contents": [{
             "parts": [{
-                "text": prompt_with_instructions
+                "text": f"كمساعد ذكي، قم بتلخيص وتنظيم نتائج البحث التالية لـ {search_type} في قائمة واضحة ومختصرة.\n\nالنتائج الخام:\n{prompt_text}"
             }]
-        }]
+        }],
+        "tools": [{"google_search": {}}]
     }
 
     try:
-        response = requests.post(url, headers=headers, data=json.dumps(payload))
-        response.raise_for_status()  # This will raise an HTTPError if the response was an error
+        response = requests.post(f"{url}?key={GEMINI_API_KEY}", headers=headers, data=json.dumps(payload))
+        response.raise_for_status()
         result = response.json()
         formatted_text = result['candidates'][0]['content']['parts'][0]['text']
         return formatted_text
     except requests.exceptions.RequestException as e:
-        logger.error(f"Error calling Gemini API: {e}")
+        print(f"Error calling Gemini API: {e}")
         return f"حدث خطأ في معالجة النتائج. قد لا تكون النتائج مرتبة بشكل جيد. {prompt_text}"
-    except (KeyError, IndexError) as e:
-        logger.error(f"Gemini API response format is not as expected: {e}")
+    except (KeyError, IndexError):
+        print("Gemini API response format is not as expected.")
         return f"تعذر تنسيق النتائج من قبل Gemini. إليك النتائج الخام:\n{prompt_text}"
+
 
 # --- Command Handlers ---
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -95,7 +80,6 @@ async def google_search_command(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(formatted_results)
 
     except Exception as e:
-        logger.error(f"An error occurred during Google search: {e}")
         await update.message.reply_text(f"عذراً، حدث خطأ أثناء البحث في جوجل. الرجاء المحاولة لاحقاً.\nالخطأ: {e}")
 
 async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -132,8 +116,8 @@ async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(formatted_results)
     
     except Exception as e:
-        logger.error(f"An error occurred during YouTube search: {e}")
         await update.message.reply_text(f"عذراً، حدث خطأ أثناء البحث في يوتيوب. الرجاء المحاولة لاحقاً.\nالخطأ: {e}")
+
 
 # --- Main Function ---
 def main():
@@ -141,7 +125,7 @@ def main():
     Main function to run the bot.
     """
     if not TELEGRAM_TOKEN or not GOOGLE_API_KEY or not YOUTUBE_API_KEY or not GOOGLE_CX or not GEMINI_API_KEY:
-        logger.error("خطأ: يرجى إعداد جميع متغيرات البيئة قبل التشغيل.")
+        print("خطأ: يرجى إعداد جميع متغيرات البيئة قبل التشغيل.")
         return
         
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -151,7 +135,7 @@ def main():
     application.add_handler(CommandHandler("google", google_search_command))
     application.add_handler(CommandHandler("youtube", youtube_search_command))
 
-    logger.info("بدأ البوت بنجاح...")
+    print("بدأ البوت بنجاح...")
     application.run_polling()
 
 
