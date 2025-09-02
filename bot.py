@@ -1,123 +1,132 @@
 import os
+import logging
 import requests
-import json
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
-from googleapiclient.discovery import build
+import google.generativeai as genai
 
-# --- Variables and API Key Setup ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY")
-YOUTUBE_API_KEY = os.environ.get("YOUTUBE_API_KEY")
-GOOGLE_CX = os.environ.get("GOOGLE_CX")
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+# ---- API KEYS ----
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN", ":")
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "-")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY", "")
+GOOGLE_CX = os.getenv("GOOGLE_CX", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 
-# لازم تضيفها في Settings تاع Render
-PORT = int(os.environ.get("PORT", 10000))
-RENDER_EXTERNAL_URL = os.environ.get("RENDER_EXTERNAL_URL")  # مثال: https://manahij.onrender.com
+# إعدادات اللوج
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-# --- Gemini API Call Function ---
-def format_results_with_gemini(prompt_text, search_type):
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent"
-    headers = {'Content-Type': 'application/json'}
-    payload = {
-        "contents": [{
-            "parts": [{
-                "text": f"كمساعد ذكي، قم بتلخيص وتنظيم نتائج البحث التالية لـ {search_type} في قائمة واضحة ومختصرة.\n\nالنتائج الخام:\n{prompt_text}"
-            }]
-        }]
+# Gemini إعداد
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
+else:
+    model = None
+
+
+# -------- Google Search --------
+def google_search(query):
+    url = "https://www.googleapis.com/customsearch/v1"
+    params = {
+        "key": GOOGLE_API_KEY,
+        "cx": GOOGLE_CX,
+        "q": query,
     }
+    r = requests.get(url, params=params)
+    results = r.json().get("items", [])
+    return results
 
+
+# -------- YouTube Search --------
+def youtube_search(query):
+    url = "https://www.googleapis.com/youtube/v3/search"
+    params = {
+        "key": YOUTUBE_API_KEY,
+        "q": query,
+        "part": "snippet",
+        "maxResults": 5,
+        "type": "video"
+    }
+    r = requests.get(url, params=params)
+    results = r.json().get("items", [])
+    return results
+
+
+# -------- تحسين النتائج بـ Gemini --------
+def refine_results(query, results):
+    if not model:
+        return results  # إذا ما كاش Gemini رجع كما جاو
+
+    text_results = []
+    for i, res in enumerate(results, start=1):
+        if "title" in res:
+            title = res["title"]
+            link = res.get("link", res.get("url", ""))
+        else:
+            title = res["snippet"]["title"]
+            link = f"https://www.youtube.com/watch?v={res['id']['videoId']}"
+        text_results.append(f"{i}. {title} - {link}")
+
+    prompt = f"""
+    هذه نتائج بحث عن: {query}
+    رتّبها وخليها أوضح للمستخدم الجزائري.
+    النتائج:
+    {chr(10).join(text_results)}
+    """
     try:
-        response = requests.post(f"{url}?key={GEMINI_API_KEY}", headers=headers, data=json.dumps(payload))
-        response.raise_for_status()
-        result = response.json()
-        formatted_text = result['candidates'][0]['content']['parts'][0]['text']
-        return formatted_text
-    except requests.exceptions.RequestException as e:
-        return f"حدث خطأ في معالجة النتائج. {e}"
-    except (KeyError, IndexError):
-        return f"تعذر تنسيق النتائج من Gemini. النتائج الخام:\n{prompt_text}"
+        response = model.generate_content(prompt)
+        return response.text
+    except Exception as e:
+        logger.error(f"Gemini Error: {e}")
+        return "\n".join(text_results)
 
-# --- Command Handlers ---
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("مرحباً بك! أنا بوت للبحث.\n\nاستخدم:\n/google [كلمة البحث]\n/youtube [كلمة البحث]")
 
-async def google_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# -------- أوامر البوت --------
+async def google_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("الرجاء إدخال عبارة بحث بعد الأمر /google.")
+        await update.message.reply_text("اكتب هكذا: /google عبارة البحث")
         return
 
-    await update.message.reply_text(f"جاري البحث عن: '{query}'...")
+    results = google_search(query)
+    if not results:
+        await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
+        return
 
-    try:
-        service = build("customsearch", "v1", developerKey=GOOGLE_API_KEY)
-        res = service.cse().list(q=query, cx=GOOGLE_CX).execute()
-        
-        raw_results = ""
-        if 'items' in res:
-            for item in res['items']:
-                raw_results += f"العنوان: {item.get('title', 'لا يوجد عنوان')}\n"
-                raw_results += f"الرابط: {item.get('link', 'لا يوجد رابط')}\n"
-                raw_results += f"المقتطف: {item.get('snippet', 'لا يوجد مقتطف')}\n\n"
-        else:
-            await update.message.reply_text("لم يتم العثور على نتائج.")
-            return
+    text = refine_results(query, results)
+    await update.message.reply_text(text)
 
-        formatted_results = format_results_with_gemini(raw_results, "Google")
-        await update.message.reply_text(formatted_results)
 
-    except Exception as e:
-        await update.message.reply_text(f"خطأ أثناء البحث في جوجل: {e}")
-
-async def youtube_search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args)
     if not query:
-        await update.message.reply_text("الرجاء إدخال عبارة بحث بعد الأمر /youtube.")
+        await update.message.reply_text("اكتب هكذا: /youtube عبارة البحث")
         return
 
-    await update.message.reply_text(f"جاري البحث عن مقاطع فيديو لـ: '{query}'...")
+    results = youtube_search(query)
+    if not results:
+        await update.message.reply_text("ما لقيتش فيديوهات 🤷‍♂️")
+        return
 
-    try:
-        service = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
-        res = service.search().list(q=query, part="id,snippet", maxResults=5).execute()
+    text = refine_results(query, results)
+    await update.message.reply_text(text)
 
-        raw_results = ""
-        if 'items' in res:
-            for item in res['items']:
-                if item['id']['kind'] == 'youtube#video':
-                    raw_results += f"العنوان: {item['snippet']['title']}\n"
-                    raw_results += f"الرابط: https://www.youtube.com/watch?v={item['id']['videoId']}\n"
-                    raw_results += f"الوصف: {item['snippet']['description']}\n\n"
-        else:
-            await update.message.reply_text("لم يتم العثور على نتائج.")
-            return
 
-        formatted_results = format_results_with_gemini(raw_results, "YouTube")
-        await update.message.reply_text(formatted_results)
-    
-    except Exception as e:
-        await update.message.reply_text(f"خطأ أثناء البحث في يوتيوب: {e}")
-
-# --- Main Function ---
+# -------- تشغيل البوت --------
 def main():
-    if not TELEGRAM_TOKEN:
-        print("خطأ: لم يتم ضبط TELEGRAM_TOKEN")
-        return
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
-    application.add_handler(CommandHandler("start", start_command))
-    application.add_handler(CommandHandler("google", google_search_command))
-    application.add_handler(CommandHandler("youtube", youtube_search_command))
+    app.add_handler(CommandHandler("google", google_command))
+    app.add_handler(CommandHandler("youtube", youtube_command))
 
-    # Webhook mode
-    application.run_webhook(
+    port = int(os.environ.get("PORT", 8080))
+    app.run_webhook(
         listen="0.0.0.0",
-        port=PORT,
+        port=port,
         url_path=TELEGRAM_TOKEN,
-        webhook_url=f"{RENDER_EXTERNAL_URL}/{TELEGRAM_TOKEN}"
+        webhook_url=f"https://{os.environ.get('RENDER_EXTERNAL_HOSTNAME')}/{TELEGRAM_TOKEN}"
     )
+
 
 if __name__ == "__main__":
     main()
