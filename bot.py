@@ -1,3 +1,4 @@
+
 import logging
 import os
 import requests
@@ -180,31 +181,23 @@ async def handle_text_message(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.error(f"حدث خطأ أثناء معالجة الرسالة: {e}")
         await update.message.reply_text("عذرًا، حدث خطأ ما. يرجى المحاولة مرة أخرى.")
 
-# دالة رئيسية لتشغيل البوت
-def main() -> None:
-    """يشغل البوت."""
-    application = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    # إضافة الأوامر (Handlers)
-    application.add_handler(CommandHandler("start", start_command))
-    
-    # إضافة معالج لجميع الرسائل النصية التي لا تبدأ بعلامة /
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
-    
-    # تشغيل البوت باستخدام الـ Webhook
-    if WEBHOOK_URL:
-        # إعداد الـ Webhook
-        application.run_webhook(
-            listen="0.0.0.0",
-            port=PORT,
-            url_path=TELEGRAM_TOKEN,
-            webhook_url=WEBHOOK_URL
-        )
-    else:
-        # في حال لم يتم العثور على رابط الـ Webhook، استخدم طريقة Polling كخيار احتياطي
-        application.run_polling(allowed_updates=Update.ALL_TYPES)
-        print("البوت يعمل الآن باستخدام Polling...")
+# إعداد تطبيق التلجرام مباشرة
+application = Application.builder().token(TELEGRAM_TOKEN).build()
 
+# إضافة الأوامر (Handlers)
+application.add_handler(CommandHandler("start", start_command))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text_message))
 
-if __name__ == "__main__":
-    main()
+# تشغيل البوت باستخدام الـ Webhook
+if WEBHOOK_URL:
+    application.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        url_path=TELEGRAM_TOKEN,
+        webhook_url=WEBHOOK_URL
+    )
+else:
+    # في حال لم يتم العثور على رابط الـ Webhook، استخدم طريقة Polling كخيار احتياطي
+    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    print("البوت يعمل الآن باستخدام Polling...")
