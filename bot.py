@@ -32,9 +32,13 @@ def google_search(query):
         "cx": GOOGLE_CX,
         "q": query,
     }
-    r = requests.get(url, params=params)
-    results = r.json().get("items", [])
-    return results
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        return r.json().get("items", [])
+    except requests.exceptions.RequestException as e:
+        logger.error(f"Google Search Error: {e}")
+        return []
 
 
 # -------- YouTube Search --------
@@ -47,15 +51,29 @@ def youtube_search(query):
         "maxResults": 5,
         "type": "video"
     }
-    r = requests.get(url, params=params)
-    results = r.json().get("items", [])
-    return results
+    try:
+        r = requests.get(url, params=params)
+        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        return r.json().get("items", [])
+    except requests.exceptions.RequestException as e:
+        logger.error(f"YouTube Search Error: {e}")
+        return []
 
 
 # -------- تحسين النتائج بـ Gemini --------
 def refine_results(query, results):
     if not model:
-        return results  # إذا ما كاش Gemini رجع كما جاو
+        return results
+
+    # 1. قراءة محتوى ملف الشخصية (prompt.txt)
+    personality_prompt = ""
+    try:
+        with open("prompt.txt", "r", encoding="utf-8") as file:
+            personality_prompt = file.read()
+    except FileNotFoundError:
+        logger.warning("ملف prompt.txt غير موجود. سيتم استخدام الشخصية الافتراضية.")
+    except Exception as e:
+        logger.error(f"خطأ في قراءة ملف prompt.txt: {e}")
 
     text_results = []
     for i, res in enumerate(results, start=1):
@@ -67,14 +85,18 @@ def refine_results(query, results):
             link = f"https://www.youtube.com/watch?v={res['id']['videoId']}"
         text_results.append(f"{i}. {title} - {link}")
 
-    prompt = f"""
+    # 2. بناء الـ prompt النهائي
+    final_prompt = f"""
+    {personality_prompt}
+
     هذه نتائج بحث عن: {query}
-    رتّبها وخليها أوضح للمستخدم الجزائري.
+    رتبها واكتبها بأسلوب مناسب، اعتمادًا على التعليمات التي قدمتها لك.
     النتائج:
     {chr(10).join(text_results)}
     """
+    
     try:
-        response = model.generate_content(prompt)
+        response = model.generate_content(final_prompt)
         return response.text
     except Exception as e:
         logger.error(f"Gemini Error: {e}")
@@ -82,24 +104,19 @@ def refine_results(query, results):
 
 
 # -------- أوامر البوت --------
-# دالة جديدة تستجيب لجميع الرسائل النصية
 async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # نأخذ النص من رسالة المستخدم
     query = update.message.text
     if not query:
         return
 
-    # نُظهر حالة "الكتابة" للمستخدم
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # نقوم بالبحث باستخدام Google Search
     results = google_search(query)
     
     if not results:
         await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
         return
 
-    # نحسّن النتائج بـ Gemini ونرسلها للمستخدم
     text = refine_results(query, results)
     await update.message.reply_text(text)
 
@@ -107,8 +124,6 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # -------- تشغيل البوت --------
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # استخدام MessageHandler بدلاً من CommandHandler للبحث المباشر
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_handler))
 
     port = int(os.environ.get("PORT", 8080))
