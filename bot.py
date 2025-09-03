@@ -34,7 +34,7 @@ def google_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status()
+        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Google Search Error: {e}")
@@ -53,11 +53,36 @@ def youtube_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status()
+        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"YouTube Search Error: {e}")
         return []
+
+# -------- توليد كلمات مفتاحية بـ Gemini --------
+def generate_keywords(query):
+    if not model:
+        return [query]  # إذا لم يتوفر Gemini، نستخدم العبارة الأصلية فقط
+
+    prompt = f"""
+    أنت مساعد ذكاء اصطناعي متخصص في فهم نية المستخدمين من خلال استفساراتهم.
+    المستخدم أرسل لك استفسارًا: "{query}".
+    مهمتك هي أن تولد قائمة من 3 إلى 5 كلمات مفتاحية (keywords) أو عبارات بحث مفصلة، مبنية على نية المستخدم المحتملة.
+    يجب أن تكون هذه الكلمات المفتاحية محايدة قدر الإمكان لتجنب المواضيع السياسية أو الحساسة، ما لم تكن العبارة الأصلية تشير إلى ذلك بوضوح.
+    يجب أن تكون الكلمات المفتاحية باللغة العربية، ومفصولة بفاصلة.
+    على سبيل المثال، إذا كان الاستفسار هو "القهوة"، يمكن أن تكون الكلمات المفتاحية هي:
+    "أنواع القهوة, فوائد القهوة, طريقة تحضير القهوة, أضرار القهوة"
+
+    استخدم فقط الكلمات المفتاحية، لا تضف أي نص آخر.
+    """
+    try:
+        response = model.generate_content(prompt)
+        # نقوم بتقسيم النص إلى قائمة من الكلمات
+        keywords = [k.strip() for k in response.text.split(',')]
+        return keywords
+    except Exception as e:
+        logger.error(f"Gemini Error generating keywords: {e}")
+        return [query]
 
 
 # -------- تحسين النتائج بـ Gemini --------
@@ -109,20 +134,36 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
+    # الخطوة الجديدة: توليد كلمات مفتاحية باستخدام Gemini
+    keywords = generate_keywords(query)
+    
+    # البحث باستخدام الكلمات المفتاحية التي تم توليدها
+    all_results = []
+    search_type = ""
+    
     # محاولة البحث في يوتيوب أولاً
-    results = youtube_search(query)
-    search_type = "youtube"
-
-    # إذا لم يتم العثور على نتائج في يوتيوب، نجرب البحث في جوجل
-    if not results:
-        results = google_search(query)
-        search_type = "google"
-        if not results:
+    for keyword in keywords:
+        results = youtube_search(keyword)
+        if results:
+            all_results.extend(results)
+    
+    if all_results:
+        search_type = "youtube"
+    else:
+        # إذا لم يتم العثور على نتائج في يوتيوب، نجرب البحث في جوجل
+        for keyword in keywords:
+            results = google_search(keyword)
+            if results:
+                all_results.extend(results)
+        
+        if all_results:
+            search_type = "google"
+        else:
             await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
             return
 
     # نحسّن النتائج ونرسلها للمستخدم
-    text = refine_results(query, results, search_type)
+    text = refine_results(query, all_results, search_type)
     await update.message.reply_text(text)
 
 
