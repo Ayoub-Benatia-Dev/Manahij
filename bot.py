@@ -34,7 +34,7 @@ def google_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        r.raise_for_status()
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Google Search Error: {e}")
@@ -53,7 +53,7 @@ def youtube_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        r.raise_for_status()
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"YouTube Search Error: {e}")
@@ -61,11 +61,10 @@ def youtube_search(query):
 
 
 # -------- تحسين النتائج بـ Gemini --------
-def refine_results(query, results):
+def refine_results(query, results, search_type):
     if not model:
         return results
 
-    # 1. قراءة محتوى ملف الشخصية (prompt.txt)
     personality_prompt = ""
     try:
         with open("prompt.txt", "r", encoding="utf-8") as file:
@@ -77,19 +76,18 @@ def refine_results(query, results):
 
     text_results = []
     for i, res in enumerate(results, start=1):
-        if "title" in res:
+        if search_type == "google":
             title = res["title"]
             link = res.get("link", res.get("url", ""))
-        else:
+        else: # youtube
             title = res["snippet"]["title"]
             link = f"https://www.youtube.com/watch?v={res['id']['videoId']}"
         text_results.append(f"{i}. {title} - {link}")
 
-    # 2. بناء الـ prompt النهائي
     final_prompt = f"""
     {personality_prompt}
 
-    هذه نتائج بحث عن: {query}
+    هذه نتائج بحث عن: {query} من نوع {search_type}.
     رتبها واكتبها بأسلوب مناسب، اعتمادًا على التعليمات التي قدمتها لك.
     النتائج:
     {chr(10).join(text_results)}
@@ -111,13 +109,20 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    results = google_search(query)
-    
-    if not results:
-        await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
-        return
+    # محاولة البحث في يوتيوب أولاً
+    results = youtube_search(query)
+    search_type = "youtube"
 
-    text = refine_results(query, results)
+    # إذا لم يتم العثور على نتائج في يوتيوب، نجرب البحث في جوجل
+    if not results:
+        results = google_search(query)
+        search_type = "google"
+        if not results:
+            await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
+            return
+
+    # نحسّن النتائج ونرسلها للمستخدم
+    text = refine_results(query, results, search_type)
     await update.message.reply_text(text)
 
 
