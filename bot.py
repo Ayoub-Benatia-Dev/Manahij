@@ -23,6 +23,20 @@ if GEMINI_API_KEY:
 else:
     model = None
 
+# -------- قراءة قائمة الشيوخ من ملف --------
+def load_scholars(filename="scholars.txt"):
+    try:
+        with open(filename, "r", encoding="utf-8") as file:
+            # نقرأ كل سطر ونزيل المسافات الزائدة
+            scholars = [line.strip() for line in file if line.strip()]
+            return scholars
+    except FileNotFoundError:
+        logger.error(f"ملف {filename} غير موجود. لن يتم تصفية البحث.")
+        return []
+    except Exception as e:
+        logger.error(f"خطأ في قراءة ملف {filename}: {e}")
+        return []
+
 
 # -------- Google Search --------
 def google_search(query):
@@ -34,7 +48,7 @@ def google_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        r.raise_for_status()
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"Google Search Error: {e}")
@@ -53,36 +67,11 @@ def youtube_search(query):
     }
     try:
         r = requests.get(url, params=params)
-        r.raise_for_status() # يرفع خطأ في حالة وجود مشكلة
+        r.raise_for_status()
         return r.json().get("items", [])
     except requests.exceptions.RequestException as e:
         logger.error(f"YouTube Search Error: {e}")
         return []
-
-# -------- توليد كلمات مفتاحية بـ Gemini --------
-def generate_keywords(query):
-    if not model:
-        return [query]  # إذا لم يتوفر Gemini، نستخدم العبارة الأصلية فقط
-
-    prompt = f"""
-    أنت مساعد ذكاء اصطناعي متخصص في فهم نية المستخدمين من خلال استفساراتهم.
-    المستخدم أرسل لك استفسارًا: "{query}".
-    مهمتك هي أن تولد قائمة من 3 إلى 5 كلمات مفتاحية (keywords) أو عبارات بحث مفصلة، مبنية على نية المستخدم المحتملة.
-    يجب أن تكون هذه الكلمات المفتاحية محايدة قدر الإمكان لتجنب المواضيع السياسية أو الحساسة، ما لم تكن العبارة الأصلية تشير إلى ذلك بوضوح.
-    يجب أن تكون الكلمات المفتاحية باللغة العربية، ومفصولة بفاصلة.
-    على سبيل المثال، إذا كان الاستفسار هو "القهوة"، يمكن أن تكون الكلمات المفتاحية هي:
-    "أنواع القهوة, فوائد القهوة, طريقة تحضير القهوة, أضرار القهوة"
-
-    استخدم فقط الكلمات المفتاحية، لا تضف أي نص آخر.
-    """
-    try:
-        response = model.generate_content(prompt)
-        # نقوم بتقسيم النص إلى قائمة من الكلمات
-        keywords = [k.strip() for k in response.text.split(',')]
-        return keywords
-    except Exception as e:
-        logger.error(f"Gemini Error generating keywords: {e}")
-        return [query]
 
 
 # -------- تحسين النتائج بـ Gemini --------
@@ -134,35 +123,53 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # الخطوة الجديدة: توليد كلمات مفتاحية باستخدام Gemini
-    keywords = generate_keywords(query)
+    # الخطوة الجديدة: قراءة قائمة الشيوخ
+    scholars = load_scholars()
     
-    # البحث باستخدام الكلمات المفتاحية التي تم توليدها
     all_results = []
     search_type = ""
     
-    # محاولة البحث في يوتيوب أولاً
-    for keyword in keywords:
-        results = youtube_search(keyword)
-        if results:
-            all_results.extend(results)
-    
-    if all_results:
-        search_type = "youtube"
-    else:
-        # إذا لم يتم العثور على نتائج في يوتيوب، نجرب البحث في جوجل
-        for keyword in keywords:
-            results = google_search(keyword)
-            if results:
-                all_results.extend(results)
-        
-        if all_results:
-            search_type = "google"
-        else:
-            await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
-            return
+    if scholars:
+        # إذا كانت قائمة الشيوخ موجودة، نبحث بالترتيب
+        for scholar in scholars:
+            # ندمج عبارة البحث مع اسم الشيخ
+            search_query = f"{query} {scholar}"
+            
+            # نحاول البحث في يوتيوب أولاً
+            youtube_results = youtube_search(search_query)
+            if youtube_results:
+                all_results.extend(youtube_results)
+                search_type = "youtube"
+                # نخرج من الحلقة بعد إيجاد نتائج في يوتيوب
+                break 
 
-    # نحسّن النتائج ونرسلها للمستخدم
+        # إذا لم نجد نتائج في يوتيوب، نبحث في جوجل
+        if not all_results:
+            for scholar in scholars:
+                search_query = f"{query} {scholar}"
+                google_results = google_search(search_query)
+                if google_results:
+                    all_results.extend(google_results)
+                    search_type = "google"
+                    # نخرج من الحلقة بعد إيجاد نتائج في جوجل
+                    break
+    
+    # إذا لم يتم إيجاد نتائج حتى بعد استخدام قائمة الشيوخ، نعود للبحث العادي
+    if not all_results:
+        # محاولة البحث في يوتيوب
+        all_results = youtube_search(query)
+        search_type = "youtube"
+
+        # إذا لم نجد في يوتيوب، نبحث في جوجل
+        if not all_results:
+            all_results = google_search(query)
+            search_type = "google"
+
+
+    if not all_results:
+        await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
+        return
+
     text = refine_results(query, all_results, search_type)
     await update.message.reply_text(text)
 
