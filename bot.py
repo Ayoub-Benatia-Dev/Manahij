@@ -2,7 +2,7 @@ import os
 import logging
 import requests
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import Application, MessageHandler, ContextTypes, filters
 import google.generativeai as genai
 
 # ---- API KEYS ----
@@ -82,32 +82,24 @@ def refine_results(query, results):
 
 
 # -------- أوامر البوت --------
-async def google_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = " ".join(context.args)
+# دالة جديدة تستجيب لجميع الرسائل النصية
+async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # نأخذ النص من رسالة المستخدم
+    query = update.message.text
     if not query:
-        await update.message.reply_text("اكتب هكذا: /google عبارة البحث")
         return
 
+    # نُظهر حالة "الكتابة" للمستخدم
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+    
+    # نقوم بالبحث باستخدام Google Search
     results = google_search(query)
+    
     if not results:
         await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
         return
 
-    text = refine_results(query, results)
-    await update.message.reply_text(text)
-
-
-async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = " ".join(context.args)
-    if not query:
-        await update.message.reply_text("اكتب هكذا: /youtube عبارة البحث")
-        return
-
-    results = youtube_search(query)
-    if not results:
-        await update.message.reply_text("ما لقيتش فيديوهات 🤷‍♂️")
-        return
-
+    # نحسّن النتائج بـ Gemini ونرسلها للمستخدم
     text = refine_results(query, results)
     await update.message.reply_text(text)
 
@@ -116,8 +108,8 @@ async def youtube_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     app = Application.builder().token(TELEGRAM_TOKEN).build()
 
-    app.add_handler(CommandHandler("google", google_command))
-    app.add_handler(CommandHandler("youtube", youtube_command))
+    # استخدام MessageHandler بدلاً من CommandHandler للبحث المباشر
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), search_handler))
 
     port = int(os.environ.get("PORT", 8080))
     app.run_webhook(
