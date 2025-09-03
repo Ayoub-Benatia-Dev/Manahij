@@ -27,7 +27,6 @@ else:
 def load_scholars(filename="scholars.txt"):
     try:
         with open(filename, "r", encoding="utf-8") as file:
-            # نقرأ كل سطر ونزيل المسافات الزائدة
             scholars = [line.strip() for line in file if line.strip()]
             return scholars
     except FileNotFoundError:
@@ -93,7 +92,7 @@ def refine_results(query, results, search_type):
         if search_type == "google":
             title = res["title"]
             link = res.get("link", res.get("url", ""))
-        else: # youtube
+        else:
             title = res["snippet"]["title"]
             link = f"https://www.youtube.com/watch?v={res['id']['videoId']}"
         text_results.append(f"{i}. {title} - {link}")
@@ -123,27 +122,21 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     
-    # الخطوة الجديدة: قراءة قائمة الشيوخ
     scholars = load_scholars()
     
     all_results = []
     search_type = ""
     
     if scholars:
-        # إذا كانت قائمة الشيوخ موجودة، نبحث بالترتيب
         for scholar in scholars:
-            # ندمج عبارة البحث مع اسم الشيخ
             search_query = f"{query} {scholar}"
             
-            # نحاول البحث في يوتيوب أولاً
             youtube_results = youtube_search(search_query)
             if youtube_results:
                 all_results.extend(youtube_results)
                 search_type = "youtube"
-                # نخرج من الحلقة بعد إيجاد نتائج في يوتيوب
                 break 
 
-        # إذا لم نجد نتائج في يوتيوب، نبحث في جوجل
         if not all_results:
             for scholar in scholars:
                 search_query = f"{query} {scholar}"
@@ -151,16 +144,12 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if google_results:
                     all_results.extend(google_results)
                     search_type = "google"
-                    # نخرج من الحلقة بعد إيجاد نتائج في جوجل
                     break
     
-    # إذا لم يتم إيجاد نتائج حتى بعد استخدام قائمة الشيوخ، نعود للبحث العادي
     if not all_results:
-        # محاولة البحث في يوتيوب
         all_results = youtube_search(query)
         search_type = "youtube"
 
-        # إذا لم نجد في يوتيوب، نبحث في جوجل
         if not all_results:
             all_results = google_search(query)
             search_type = "google"
