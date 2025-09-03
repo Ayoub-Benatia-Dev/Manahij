@@ -36,6 +36,7 @@ def load_scholars(filename="scholars.txt"):
         logger.error(f"خطأ في قراءة ملف {filename}: {e}")
         return []
 
+
 # -------- Google Search --------
 def google_search(query):
     url = "https://www.googleapis.com/customsearch/v1"
@@ -51,6 +52,7 @@ def google_search(query):
     except requests.exceptions.RequestException as e:
         logger.error(f"Google Search Error: {e}")
         return []
+
 
 # -------- YouTube Search --------
 def youtube_search(query):
@@ -89,17 +91,22 @@ def refine_results(query, results, search_type):
         if search_type == "google":
             title = res.get("title", "")
             link = res.get("link", res.get("url", ""))
-        else:
+        else: # youtube
             title = res["snippet"]["title"]
             link = f"https://www.youtube.com/watch?v={res['id']['videoId']}"
         text_results.append(f"{i}. {title} - {link}")
 
+    # هنا يتم إرسال كل النتائج التي تم تجميعها إلى Gemini لتصفيتها
     final_prompt = f"""
     {personality_prompt}
 
-    هذه نتائج بحث عن: {query} من نوع {search_type}.
-    رتبها واكتبها بأسلوب مناسب، اعتمادًا على التعليمات التي قدمتها لك.
-    النتائج:
+    قمت بجمع هذه النتائج من محركات البحث بناءً على استفسار المستخدم: "{query}".
+    النتائج التي ستقدمها للمستخدم يجب أن تكون ذات صلة بالمواضيع الدينية والشرعية فقط.
+    قم بمراجعة جميع النتائج واختيار الأكثر صلة ودقة بطلب المستخدم.
+    إذا كانت النتيجة لا تتعلق بالمواضيع الشرعية أو هي مجرد أخبار أو مقالات عامة، تجاهلها.
+    بعد اختيار النتائج المناسبة، قم بترتيبها وصياغتها بأسلوب مناسب كما هو محدد في تعليمات الشخصية أعلاه.
+
+    النتائج التي تم جمعها:
     {chr(10).join(text_results)}
     """
     
@@ -110,36 +117,33 @@ def refine_results(query, results, search_type):
         logger.error(f"Gemini Error: {e}")
         return "\n".join(text_results)
 
-# -------- تحليل طلب المستخدم وتوليد استعلامات البحث --------
-def analyze_and_generate_queries(query, scholars):
+# -------- توليد عبارات بحث متنوعة بـ Gemini --------
+def generate_diverse_queries(query, scholars):
     if not model or not scholars:
         return [query]
 
+    # مهمة Gemini هي توليد عبارات بحث متنوعة
     prompt = f"""
-    أنت مساعد ذكاء اصطناعي متخصص في فهم نية المستخدمين من خلال استفساراتهم الشرعية.
-    المستخدم أرسل استفسارًا: "{query}".
-    مهمتك هي تحليل هذا الاستفسار وتوليد قائمة من 3 إلى 5 كلمات مفتاحية (keywords) أو عبارات بحث مفصلة، مبنية على نية المستخدم المحتملة. يجب أن تكون هذه الكلمات المفتاحية محددة ودقيقة.
-    ثم قم بدمج كل كلمة مفتاحية مع اسم من قائمة الشيوخ الموثوقين.
-    على سبيل المثال، إذا كان الاستفسار هو "حكم حماس" وكانت قائمة الشيوخ "الشيخ فلان، الشيخ علان"،
-    يجب أن تكون المخرجات كالتالي:
-    حكم حماس الشيخ فلان
-    حكم حماس الشيخ علان
+    أنت مساعد ذكاء اصطناعي مهمتك هي توليد عبارات بحث دقيقة ومفصلة.
+    المستخدم يبحث عن موضوع: "{query}".
+    يجب أن تولد قائمة من عبارات البحث (لا تقل عن 5) التي يمكن استخدامها في البحث عن فتاوى أو أحكام شرعية حول هذا الموضوع.
+    قم بدمج كل عبارة مع اسم من أسماء الشيوخ الموثوقين المذكورين أدناه.
+    على سبيل المثال، إذا كان الموضوع هو "الزكاة" وقائمة الشيوخ هي "الشيخ فلان، الشيخ علان"،
+    يمكن أن تكون المخرجات كالتالي:
+    حكم الزكاة الشيخ فلان
+    أحكام الزكاة الشيخ علان
+    شروط الزكاة الشيخ فلان
 
     استخدم فقط عبارات البحث، لا تضف أي نص آخر.
+    الشيوخ:
+    {', '.join(scholars)}
     """
     
     try:
         response = model.generate_content(prompt)
         # نقوم بتقسيم النص إلى قائمة من الكلمات
-        keywords = [k.strip() for k in response.text.split('\n')]
-        
-        # دمج كل كلمة مفتاحية مع اسم شيخ
-        search_queries = []
-        for keyword in keywords:
-            for scholar in scholars:
-                search_queries.append(f"{keyword} {scholar}")
-        
-        return search_queries
+        queries = [k.strip() for k in response.text.split('\n')]
+        return queries
     except Exception as e:
         logger.error(f"Gemini Error generating queries: {e}")
         return [query]
@@ -154,49 +158,36 @@ async def search_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     scholars = load_scholars()
     
-    # الخطوة الجديدة: توليد استعلامات بحث ذكية
-    smart_queries = analyze_and_generate_queries(query, scholars)
+    # الخطوة الجديدة: توليد عبارات بحث ذكية ومتنوعة
+    search_queries = generate_diverse_queries(query, scholars)
     
     all_results = []
     search_type = ""
     
-    # محاولة البحث في يوتيوب أولاً باستخدام الاستعلامات الذكية
-    for smart_query in smart_queries:
-        results = youtube_search(smart_query)
+    # محاولة البحث في يوتيوب أولاً باستخدام جميع الاستعلامات
+    for search_query in search_queries:
+        results = youtube_search(search_query)
         if results:
             all_results.extend(results)
-            search_type = "youtube"
-            break
-
-    # إذا لم نجد نتائج في يوتيوب، نجرب البحث في جوجل
-    if not all_results:
-        for smart_query in smart_queries:
-            results = google_search(smart_query)
-            if results:
-                all_results.extend(results)
-                search_type = "google"
-                break
     
-    # إذا لم يتم إيجاد نتائج حتى بعد استخدام الاستعلامات الذكية، نعود للبحث العادي
-    if not all_results:
-        results = youtube_search(query)
-        if results:
-            all_results.extend(results)
-            search_type = "youtube"
-        else:
-            results = google_search(query)
+    if all_results:
+        search_type = "youtube"
+    else:
+        # إذا لم نجد نتائج في يوتيوب، نجرب البحث في جوجل
+        for search_query in search_queries:
+            results = google_search(search_query)
             if results:
                 all_results.extend(results)
-                search_type = "google"
-
-
+    
+        if all_results:
+            search_type = "google"
+    
     if not all_results:
         await update.message.reply_text("ما لقيتش نتائج 🤷‍♂️")
         return
 
     text = refine_results(query, all_results, search_type)
     await update.message.reply_text(text)
-
 
 # -------- تشغيل البوت --------
 def main():
